@@ -3441,9 +3441,6 @@ struct Direct3D12VDPRenderer::Impl {
             VDP1SubmitSpans();
         }
 
-        // TODO: fix off-by-one error in span length somewhere
-        // TODO: test and fix MSB
-
         const auto [x0, y0] = coord0;
         const auto [x1, y1] = coord1;
 

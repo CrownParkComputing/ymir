@@ -553,11 +553,11 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     lineStepper.SetStep(spanStep);
 
     // Specializations are split into the following blocks:
-    // - MSB
+    // - MSB [TODO: test and fix]
     // - Non-MSB
     //   - Replace or Half-Luminance (HALF_DST==0)
-    //   - Half-Transparency (HALF_DST==1, HALF_SRC==1)
-    //   - Shadow (HALF_DST==1, HALF_SRC==0)
+    //   - Half-Transparency (HALF_DST==1, HALF_SRC==1) [TODO: implement]
+    //   - Shadow (HALF_DST==1, HALF_SRC==0) [TODO: implement]
 
 #if POLYSPEC_MODE_MSB
     // =========================================================================
@@ -684,7 +684,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     const uint outOffset = coord.y * fbSize.x + coord.x;
     InterlockedMax(internalSpriteOut[outOffset], value);
 
-    if (span.antialias) {
+    if (span.antialias && lineStepper.NeedsAA()) {
         const int2 aaCoord = lineStepper.AACoord();
         const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
         InterlockedMax(internalSpriteOut[aaOutOffset], value);
