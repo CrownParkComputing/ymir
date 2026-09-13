@@ -556,8 +556,8 @@ struct BarrierTracker {
             m_desiredBufferStates.clear();
             for (ID3D12Resource *buffer : m_uavBufferBarriers) {
                 bufferBarriers.push_back({
-                    .SyncBefore = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
-                    .SyncAfter = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
+                    .SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                    .SyncAfter = D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                     .AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                     .AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                     .pResource = buffer,
@@ -612,8 +612,8 @@ struct BarrierTracker {
             m_desiredTextureStates.clear();
             for (ID3D12Resource *texture : m_uavTextureBarriers) {
                 textureBarriers.push_back({
-                    .SyncBefore = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
-                    .SyncAfter = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
+                    .SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                    .SyncAfter = D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                     .AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                     .AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                     .LayoutBefore = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS,
@@ -874,8 +874,8 @@ struct Direct3D12VDPRenderer::Impl {
         HLSLbool antialias; // Antialias line
 
         // Gouraud only parameters
-        ColorR8G8B8A8 gouraud0; // Starting gouraud value
-        ColorR8G8B8A8 gouraud1; // Ending gouraud value
+        HLSLuint3 gouraud0; // Starting gouraud value
+        HLSLuint3 gouraud1; // Ending gouraud value
 
         HLSLuint cmdpmod; // CMDPMOD value
         HLSLuint cmdcolr; // CMDCOLR value
@@ -3375,14 +3375,13 @@ struct Direct3D12VDPRenderer::Impl {
         params.enhancements.transparentMeshes = enhancements.transparentMeshes;
     }
 
-    void VDP1SelectPolyDrawShader(bool textured, VDP1Command::DrawMode mode) {
+    bool VDP1SelectPolyDrawShader(bool textured, VDP1Command::DrawMode mode) {
         // Submit existing spans before switching shaders
         const size_t index = MakeVDP1PolyDrawShaderIndex(textured, mode);
-        if (vdp1.currPolyDrawShaderIndex != index || vdp1.currPolyDrawShaderMSB != mode.msbOn) {
-            vdp1.currPolyDrawShaderIndex = index;
-            vdp1.currPolyDrawShaderMSB = mode.msbOn;
-            VDP1SubmitSpans();
-        }
+        const bool changed = vdp1.currPolyDrawShaderIndex != index || vdp1.currPolyDrawShaderMSB != mode.msbOn;
+        vdp1.currPolyDrawShaderIndex = index;
+        vdp1.currPolyDrawShaderMSB = mode.msbOn;
+        return changed;
     }
 
     bool VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data, bool antialias) {
@@ -3403,7 +3402,9 @@ struct Direct3D12VDPRenderer::Impl {
         }
 
         // Switch polygon drawing shader based on the current settings
-        VDP1SelectPolyDrawShader(false, data.mode);
+        if (VDP1SelectPolyDrawShader(false, data.mode)) {
+            VDP1SubmitSpans();
+        }
 
         // Determine span length
         LineStepper line{coord0, coord1};
@@ -3418,6 +3419,11 @@ struct Direct3D12VDPRenderer::Impl {
             // Entire line was clipped
             return false;
         }
+
+        // TODO: fix off-by-one error in span length somewhere
+        // TODO: fix frame splicing
+        // TODO: fix gouraud shading
+        // TODO: test and fix MSB
 
         // TODO: submit spans if the total pixel count will exceed the dispatch limit of 65535*32
 

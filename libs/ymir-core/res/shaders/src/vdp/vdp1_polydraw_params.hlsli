@@ -17,8 +17,8 @@ struct PolySpan {
     uint skip;
     bool antialias;
 
-    uint gouraud0;
-    uint gouraud1;
+    uint3 gouraud0;
+    uint3 gouraud1;
 
     uint cmdpmod;
     uint cmdcolr;

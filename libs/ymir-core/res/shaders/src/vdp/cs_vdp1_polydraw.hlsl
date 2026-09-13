@@ -16,7 +16,7 @@
 #ifdef __INTELLISENSE__
 #define POLYSPEC_TEXTURED         0
 #define POLYSPEC_TRANSPARENT_MESH 0
-#define POLYSPEC_MODE_MSB         1
+#define POLYSPEC_MODE_MSB         0
 #define POLYSPEC_SHADING_GOURAUD  1
 #define POLYSPEC_SHADING_HALF_SRC 1
 #define POLYSPEC_SHADING_HALF_DST 0
@@ -277,7 +277,7 @@ struct GouraudStepper {
     GouraudChannelStepper stepperB;
 
     // Sets up gouraud shading with the given length and start and end colors.
-    void Setup(uint length, uint4 gouraudStart, uint4 gouraudEnd) {
+    void Setup(uint length, uint3 gouraudStart, uint3 gouraudEnd) {
         stepperR.Setup(length, gouraudStart.r, gouraudEnd.r);
         stepperG.Setup(length, gouraudStart.g, gouraudEnd.g);
         stepperB.Setup(length, gouraudStart.b, gouraudEnd.b);
