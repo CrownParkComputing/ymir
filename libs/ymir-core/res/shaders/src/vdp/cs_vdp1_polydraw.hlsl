@@ -427,7 +427,7 @@ struct LineStepper {
 
     // Retrieves the current X and Y coordinates.
     int2 Coord() {
-        return pos & 0x7FF;
+        return pos /*& 0x7FF*/;
     }
 
     // Returns the X and Y coordinates of the antialiased pixel.

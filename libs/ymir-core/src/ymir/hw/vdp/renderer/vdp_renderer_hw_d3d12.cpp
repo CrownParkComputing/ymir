@@ -3415,10 +3415,10 @@ struct Direct3D12VDPRenderer::Impl {
         // Append span to list
         FrameContext &frameCtx = frames.GetCurrentFrame();
         VDP1SpanParams &spanParams = frameCtx.cpuSpanParams[frameCtx.cpuSpanCount];
-        const uint32 length = line.Length() + 1;
         const uint32 skip = line.SystemClip(vdpState.state1.sysClipH, vdpState.state1.sysClipV);
+        const uint32 length = line.Length();
 
-        if (!line.CanStep()) {
+        if (length == 0) {
             // Entire line was clipped
             return false;
         }
@@ -3456,7 +3456,7 @@ struct Direct3D12VDPRenderer::Impl {
         // Update prefix sum
         HLSLuint &nextSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount + 1];
         const HLSLuint currSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount];
-        nextSum = currSum + spanParams.length - spanParams.skip;
+        nextSum = currSum + spanParams.length;
 
         // If list is full, flush it
         ++frameCtx.cpuSpanCount;
