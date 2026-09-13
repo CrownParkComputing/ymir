@@ -4531,6 +4531,9 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
+        // FIXME: this should not be needed
+        VDP1SubmitSpans();
+
         FrameContext &frameCtx = frames.GetCurrentFrame();
 
         const bool deinterlace = enhancements.deinterlace && vdpState.regs2.TVMD.IsInterlaced();
