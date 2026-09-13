@@ -3,6 +3,7 @@
 #include "vdp1_polydraw_params.hlsli"
 
 #include "util/bit_ops.hlsli"
+#include "util/data_ops.hlsli"
 
 // Shader specialization macros:
 // - POLYSPEC_TEXTURED: 0=solid color; 1=textured
@@ -14,7 +15,7 @@
 
 // Modify these to adjust IntelliSense highlighting
 #ifdef __INTELLISENSE__
-#define POLYSPEC_TEXTURED         0
+#define POLYSPEC_TEXTURED         1
 #define POLYSPEC_TRANSPARENT_MESH 0
 #define POLYSPEC_MODE_MSB         0
 #define POLYSPEC_SHADING_GOURAUD  1
@@ -29,6 +30,7 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
 
 StructuredBuffer<PolySpan> spanParams : register(t1);
 Buffer<uint> spanPrefixSums : register(t2);
+ByteAddressBuffer vram : register(t3);
 
 #if POLYSPEC_MODE_MSB
 RWByteAddressBuffer fbramOut : register(u0);
@@ -454,30 +456,73 @@ uint Color555ToUint16(uint4 color) {
     return color.r | (color.g << 5) | (color.b << 10) | (color.a << 15);
 }
 
+void ReadTexel(uint u, uint v, uint charAddress, uint charSizeH, uint colorMode, uint colorData, out uint color, out bool transparent, out bool hasEndCode) {
+    const uint charIndex = u + v * charSizeH;
+
+    switch (colorMode) {
+        case 0: // 4 bpp, 16 colors, bank mode
+            color = Read8(vram, charAddress + (charIndex >> 1));
+            color = (color >> ((~u & 1) * 4)) & 0xF;
+            hasEndCode = color == 0xF;
+            transparent = color == 0x0;
+            color |= colorData & 0xFFF0;
+            break;
+        case 1: // 4 bpp, 16 colors, lookup table mode
+            color = Read8(vram, charAddress + (charIndex >> 1));
+            color = (color >> ((~u & 1) * 4)) & 0xF;
+            hasEndCode = color == 0xF;
+            transparent = color == 0x0;
+            color = Read16(vram, color * 2 + colorData * 8);
+            break;
+        case 2: // 8 bpp, 64 colors, bank mode
+            color = Read8(vram, charAddress + charIndex);
+            transparent = color == 0x00;
+            hasEndCode = color == 0xFF;
+            color &= 0x3F;
+            color |= colorData & 0xFFC0;
+            break;
+        case 3: // 8 bpp, 128 colors, bank mode
+            color = Read8(vram, charAddress + charIndex);
+            transparent = color == 0x00;
+            hasEndCode = color == 0xFF;
+            color &= 0x7F;
+            color |= colorData & 0xFF80;
+            break;
+        case 4: // 8 bpp, 256 colors, bank mode
+            color = Read8(vram, charAddress + charIndex);
+            transparent = color == 0x00;
+            hasEndCode = color == 0xFF;
+            color |= colorData & 0xFF00;
+            break;
+        case 5: // 16 bpp, 32768 colors, RGB mode
+            color = Read16(vram, (charAddress & ~0xF) + charIndex * 2);
+            transparent = !BitTest(color, 15);
+            hasEndCode = color == 0x7FFF;
+            break;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
 [numthreads(64, 1, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
-    // TODO: implement
-
-    // POLYSPEC_SHADING_HALF_DST and POLYSPEC_SHADING_HALF_SRC specify the blending mode:
-    //  DST=0 SRC=0  Replace            dst = src
-    //  DST=0 SRC=1  Half-Luminance     dst = src >> 1
-    //  DST=1 SRC=0  Shadow             if (dst.msb) { dst = dst >> 1 }
-    //  DST=1 SRC=1  Half-Transparency  if (dst.msb) { dst = (dst + src) >> 1 } else { dst = src }
-    //
-    // More implementation details:
-    // - inputs:
-    //   - span parameters list
-    //     - start and end coordinates and gouraud colors
-    //     - span length in pixels
-    //     - span skip amount in pixels
-    //     - texture V coordinate
-    //     - horizontal flip bit
-    //   - precomputed span length and prefix sums to aid pixel-level indexing
+    // Implementation notes:
+    // - POLYSPEC_SHADING_HALF_DST and POLYSPEC_SHADING_HALF_SRC specify the blending mode:
+    //    DST=0 SRC=0  Replace            dst = src
+    //    DST=0 SRC=1  Half-Luminance     dst = src >> 1
+    //    DST=1 SRC=0  Shadow             if (dst.msb) { dst = dst >> 1 }
+    //    DST=1 SRC=1  Half-Transparency  if (dst.msb) { dst = (dst + src) >> 1 } else { dst = src }
+    // - Inputs:
+    //   - Span parameters list
+    //     - Start and end coordinates and gouraud colors
+    //     - Span length in pixels
+    //     - Span skip amount in pixels
+    //     - Texture V coordinate
+    //     - Horizontal flip bit
+    //   - Precomputed span length and prefix sums to aid pixel-level indexing
     // - id.x is a pixel-level index into the span sequence
-    //   - for example, if the span list contains 3 spans with lengths 10, 12, 14 and skips 0, 0, 10:
+    //   - For example, if the span list contains 3 spans with lengths 10, 12, 14 and skips 0, 0, 10:
     //     - index  0 -> span 0 pixel 0
     //     - index  7 -> span 0 pixel 7
     //     - index  9 -> span 0 pixel 9
@@ -487,13 +532,13 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     //     - index 22 -> span 2 pixel 10
     //     - index 25 -> span 2 pixel 13 (last)
     //     - index 26 -> out of bounds, discarded
-    // - spans are drawn parallel using order-independent algorithms depending on the blending mode
+    // - Spans are drawn parallel using order-independent algorithms depending on the blending mode
     //   - MSB applies the bit directly to FBRAM with InterlockedOr (or set bits in a dedicated buffer; check which is faster)
     //   - Replace and Half-Luminance use InterlockedMax with a sequence number to write the latest version of a pixel to the output
     //   - Shadow increments per-pixel counters with InterlockedAdd
     //   - Half-Transparency uses an order-independent transparency algorithm [TBD]
-    // - the output merger shader applies the output of this shader to the output FBRAM in 32-bit units (2 or 4 pixels at a time)
-    //   - skipped for MSB (unless using a dedicated buffer)
+    // - The output merger shader applies the output of this shader to the output FBRAM in 32-bit units (2 or 4 pixels at a time)
+    //   - Skipped for MSB (unless using a dedicated buffer)
 
     const uint spanIndex = GetSpanIndex(id.x);
     if (spanIndex == 0xFFFFFFFF) {
@@ -507,8 +552,16 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     lineStepper.Setup(span.coord0, span.coord1, span.antialias);
     lineStepper.SetStep(spanStep);
 
+    // Specializations are split into the following blocks:
+    // - MSB
+    // - Non-MSB
+    //   - Replace or Half-Luminance (HALF_DST==0)
+    //   - Half-Transparency (HALF_DST==1, HALF_SRC==1)
+    //   - Shadow (HALF_DST==1, HALF_SRC==0)
 
 #if POLYSPEC_MODE_MSB
+    // =========================================================================
+    // MSB
 
 #if POLYSPEC_TEXTURED
     // TODO: fetch texel to check if it is transparent
@@ -528,12 +581,56 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         fbramOut.InterlockedOr(aaOutOffset, 0x8000, dummy);
     }
 
-#else // not MSB
+#else
+    // =========================================================================
+    // Non-MSB
 
     uint spriteData;
 #if POLYSPEC_TEXTURED
-    // TODO: fetch texel
-    spriteData = 0xFFFF;
+    {
+        // Fetch texel
+        TextureStepper uStepper;
+        const uint charSizeH = max(BitExtract(span.cmdsize, 8, 6) << 3, 1);
+        const bool flipH = span.flipH;
+        const uint colorMode = BitExtract(span.cmdpmod, 3, 3);
+        const bool transparentPixelDisable = BitTest(span.cmdpmod, 6);
+        const bool endCodesEnabled = !BitTest(span.cmdpmod, 7);
+        const bool useHighSpeedShrink = BitTest(span.cmdpmod, 12) && lineStepper.Length() < charSizeH - 1;
+        const bool evenOddCoordSelect = BitTest(g_commonParams.displayParams, 6);
+
+        int uStart = 0;
+        int uEnd = charSizeH - 1;
+        if (flipH) {
+            int tmp = uStart;
+            uStart = uEnd;
+            uEnd = tmp;
+        }
+
+        uStepper.Setup(lineStepper.Length() + 1, uStart, uEnd, useHighSpeedShrink, evenOddCoordSelect);
+        uStepper.SetPixel(spanStep);
+        uStepper.ResetAndStepTexel();
+
+        uint endCodeIndex;
+        bool checkEndCodes;
+        if (endCodesEnabled && !useHighSpeedShrink) {
+            endCodeIndex = charSizeH; // TODO: use end code length computed from CPU side
+            checkEndCodes = endCodeIndex < charSizeH;
+        } else {
+            checkEndCodes = false;
+        }
+
+        const uint texU = uStepper.Value();
+        if (!checkEndCodes || (flipH ? (texU > endCodeIndex) : (texU < endCodeIndex))) {
+            bool transparent;
+            bool hasEndCode;
+            ReadTexel(texU, span.texV, span.charAddr, charSizeH, colorMode, span.cmdcolr, spriteData, transparent, hasEndCode);
+
+            if ((hasEndCode && endCodesEnabled) || (transparent && !transparentPixelDisable)) {
+                // Transparent pixel
+                return;
+            }
+        }
+    }
 #else
     spriteData = span.cmdcolr;
     if (pixel8Bits) {
@@ -541,7 +638,13 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     }
 #endif
 
+// Whether the shader needs to modify the source color.
+// Avoids wasting time converting uint16 <-> Color555 when the source color is used as is.
+#define POLY_MODIFY_SRC_COLOR (POLYSPEC_SHADING_GOURAUD || POLYSPEC_SHADING_HALF_SRC)
+
+#if POLY_MODIFY_SRC_COLOR
     uint4 srcColor = Uint16ToColor555(spriteData);
+#endif
 
 #if POLYSPEC_SHADING_GOURAUD
     if (!pixel8Bits) {
@@ -552,7 +655,11 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     }
 #endif
 
-#if !POLYSPEC_SHADING_HALF_DST // Replace or Half-Luminance
+
+#if !POLYSPEC_SHADING_HALF_DST
+    // -------------------------------------------------------------------------
+    // Replace of Half-Luminance
+
 #if POLYSPEC_SHADING_HALF_SRC
     if (!pixel8Bits) {
         // Apply half-luminance
@@ -562,8 +669,16 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     }
 #endif
 
+#if POLY_MODIFY_SRC_COLOR
     spriteData = Color555ToUint16(srcColor);
+#endif
+
     const uint value = spriteData | ((spanIndex + 1u) << 16u);
+
+    // TODO: const bool meshEnable = BitTest(span.cmdpmod, 8);
+    // if (!POLYSPEC_TRANSPARENT_MESH && meshEnable && BitTest(coord.x ^ coord.y, 0)) {
+    //     discard pixel
+    // }
 
     const int2 coord = lineStepper.Coord();
     const uint outOffset = coord.y * fbSize.x + coord.x;
@@ -574,13 +689,19 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
         InterlockedMax(internalSpriteOut[aaOutOffset], value);
     }
-#elif POLYSPEC_SHADING_HALF_SRC // Half-Transparency
+#elif POLYSPEC_SHADING_HALF_SRC
+    // -------------------------------------------------------------------------
+    // Half-Transparency
+
     // TODO: use OIT algorithm
     // see https://github.com/nvpro-samples/vk_order_independent_transparency
     // - Linked List
     // - Loop32
     // - Spinlock
-#else // Shadow
+#else
+    // -------------------------------------------------------------------------
+    // Shadow
+
     // TODO: increment shadow writes per pixel with InterlockedAdd
     // - output merger shifts components right by min(N, 5) if the respective MSB is set, then clears counters to zero
 #endif

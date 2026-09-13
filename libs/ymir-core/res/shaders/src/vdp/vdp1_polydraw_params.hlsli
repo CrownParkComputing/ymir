@@ -21,8 +21,8 @@ struct PolySpan {
 
     uint cmdpmod;
     uint cmdcolr;
-    uint cmdsrca;
     uint cmdsize;
+    uint charAddr;
 
     uint texV;
     bool flipH;

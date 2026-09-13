@@ -876,10 +876,10 @@ struct Direct3D12VDPRenderer::Impl {
         HLSLuint3 gouraud0; // Starting gouraud value
         HLSLuint3 gouraud1; // Ending gouraud value
 
-        HLSLuint cmdpmod; // CMDPMOD value
-        HLSLuint cmdcolr; // CMDCOLR value
-        HLSLuint cmdsrca; // CMDSRCA value (textured only)
-        HLSLuint cmdsize; // CMDSIZE value (textured only)
+        HLSLuint cmdpmod;  // CMDPMOD value
+        HLSLuint cmdcolr;  // CMDCOLR value
+        HLSLuint cmdsize;  // CMDSIZE value (textured only)
+        HLSLuint charAddr; // CMDSRCA value * 8 (textured only)
 
         // Textured only parameters
         HLSLuint texV;  // Texture V coordinate
@@ -887,16 +887,20 @@ struct Direct3D12VDPRenderer::Impl {
     };
 
     /// @brief Maximum number of spans to send per batch.
-    static constexpr size_t kMaxVDP1Spans = 1024;
+    static constexpr uint32 kMaxVDP1Spans = 1024;
 
     /// @brief Maximum number of pixels per dispatch.
-    static constexpr size_t kMaxVDP1PixelsPerDispatch = 1048576;
+    static constexpr uint32 kMaxVDP1PixelsPerDispatch = 1048576;
 
     // The polygon drawing shader uses the span index as a sequence number to enable parallel drawing.
     // This sequence has to fit in the top 16 bits of the output value, limiting the number of span drawn per
     // dispatch. We reserve zero as a special value indicating the previous dispatch's contents (or empty pixels).
     // Therefore, the absolute maximum number of spans that can be submitted per dispatch is 65535.
     static_assert(kMaxVDP1Spans <= 65535);
+
+    // The absolute maximum limit for pixels per dispatch is dictated by the maximum number of compute dispatch groups.
+    // Each group has 64 threads, as defined in the polygon drawing shader.
+    static_assert(kMaxVDP1PixelsPerDispatch <= 65535 * 64);
 
     struct VDP1Resources {
         VDP1Resources() {
@@ -2125,7 +2129,7 @@ struct Direct3D12VDPRenderer::Impl {
             rootSigBuilder.Add32BitConstants(0, (sizeof(VDP1CommonRenderParams) + sizeof(VDP1PolyDrawParams)) /
                                                     sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(2, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddSRVs(3, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
                 .AddUAVs(1, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
@@ -2291,6 +2295,7 @@ struct Direct3D12VDPRenderer::Impl {
                 const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
                     frameCtx.spanParamsSRV.cpuHandle,
                     frameCtx.spanPrefixSumsSRV.cpuHandle,
+                    vdp1.vramSRV.cpuHandle,
                     frameCtx.internalSpriteOutUAV.cpuHandle,
                 };
                 std::array<UINT, std::size(srcHandles)> srcSizes{};
@@ -2323,6 +2328,7 @@ struct Direct3D12VDPRenderer::Impl {
                 const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
                     frameCtx.spanParamsSRV.cpuHandle,
                     frameCtx.spanPrefixSumsSRV.cpuHandle,
+                    vdp1.vramSRV.cpuHandle,
                     vdp1.fbramUAV.cpuHandle,
                 };
                 std::array<UINT, std::size(srcHandles)> srcSizes{};
@@ -3247,6 +3253,11 @@ struct Direct3D12VDPRenderer::Impl {
         uint16 color;
         Color555 gouraud0;
         Color555 gouraud1;
+
+        uint32 charAddr;
+        VDP1Command::Size size;
+        uint32 texV;
+        bool flipH;
     };
 
     util::VoidResult<> VDP1SubmitSpans() {
@@ -3391,7 +3402,7 @@ struct Direct3D12VDPRenderer::Impl {
         }
     }
 
-    bool VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data, bool antialias) {
+    bool VDP1AddSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data, bool textured, bool antialias) {
         // Discard if completely out of bounds
         if (coord0.x() < 0 && coord1.x() < 0) {
             return false;
@@ -3409,7 +3420,7 @@ struct Direct3D12VDPRenderer::Impl {
         }
 
         // Switch polygon drawing shader based on the current settings
-        VDP1SelectPolyDrawShader(false, data.mode);
+        VDP1SelectPolyDrawShader(textured, data.mode);
 
         // Determine span length
         LineStepper line{coord0, coord1};
@@ -3456,6 +3467,14 @@ struct Direct3D12VDPRenderer::Impl {
             spanParams.gouraud1.b = data.gouraud1.b;
         }
 
+        if (textured) {
+            spanParams.cmdsize = data.size.u16;
+            spanParams.charAddr = data.charAddr;
+
+            spanParams.texV = data.texV;
+            spanParams.flipH = data.flipH;
+        }
+
         // Update prefix sum
         HLSLuint &nextSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount + 1];
         const HLSLuint currSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount];
@@ -3471,14 +3490,38 @@ struct Direct3D12VDPRenderer::Impl {
         return true;
     }
 
-    // TODO: VDP1AddTexturedSpan
-
     void VDP1Cmd_DrawNormalSprite(uint32 cmdAddress, VDP1Command::Control control) {
         if (!vdpState.state2.layerEnabled[0]) {
             return;
         }
+        const VDP1State &state = vdpState.state1;
 
-        // TODO: implement
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
+        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const uint32 charSizeH = size.H * 8;
+        const uint32 charSizeV = size.V;
+
+        const sint32 xb = xa + std::max(charSizeH, 1u) - 1u; // right X
+        const sint32 yb = ya + std::max(charSizeV, 1u) - 1u; // bottom Y
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, ya};
+        const CoordS32 coordC{xb, yb};
+        const CoordS32 coordD{xa, yb};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+            .charAddr = charAddr,
+            .size = size,
+            .flipH = control.flipH,
+        };
+
+        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
     }
 
     void VDP1Cmd_DrawScaledSprite(uint32 cmdAddress, VDP1Command::Control control) {
@@ -3486,7 +3529,103 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        // TODO: implement
+        const VDP1State &state = vdpState.state1;
+
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
+        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+
+        // Calculated quad coordinates
+        sint32 qxa = xa;
+        sint32 qya = ya;
+        sint32 qxb = xa;
+        sint32 qyb = ya;
+        sint32 qxc = xa;
+        sint32 qyc = ya;
+        sint32 qxd = xa;
+        sint32 qyd = ya;
+
+        const uint8 zoomPointH = bit::extract<0, 1>(control.zoomPoint);
+        const uint8 zoomPointV = bit::extract<2, 3>(control.zoomPoint);
+
+        if (zoomPointH == 0) {
+            const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14));
+
+            qxb = xc;
+            qxc = xc;
+        } else {
+            const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10));
+
+            switch (zoomPointH) {
+            case 1:
+                qxb += xb;
+                qxc += xb;
+                break;
+            case 2:
+                qxa -= xb >> 1;
+                qxb += (xb + 1) >> 1;
+                qxc += (xb + 1) >> 1;
+                qxd -= xb >> 1;
+                break;
+            case 3:
+                qxa -= xb;
+                qxd -= xb;
+                break;
+            }
+        }
+
+        if (zoomPointV == 0) {
+            const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16));
+
+            qyc = yc;
+            qyd = yc;
+        } else {
+            const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12));
+
+            switch (zoomPointV) {
+            case 1:
+                qyc += yb;
+                qyd += yb;
+                break;
+            case 2:
+                qya -= yb >> 1;
+                qyb -= yb >> 1;
+                qyc += (yb + 1) >> 1;
+                qyd += (yb + 1) >> 1;
+                break;
+            case 3:
+                qya -= yb;
+                qyb -= yb;
+                break;
+            }
+        }
+
+        qxa += state.localCoordX;
+        qya += state.localCoordY;
+        qxb += state.localCoordX;
+        qyb += state.localCoordY;
+        qxc += state.localCoordX;
+        qyc += state.localCoordY;
+        qxd += state.localCoordX;
+        qyd += state.localCoordY;
+
+        const CoordS32 coordA{qxa, qya};
+        const CoordS32 coordB{qxb, qya};
+        const CoordS32 coordC{qxb, qyb};
+        const CoordS32 coordD{qxa, qyb};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+            .charAddr = charAddr,
+            .size = size,
+            .flipH = control.flipH,
+        };
+
+        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
     }
 
     void VDP1Cmd_DrawDistortedSprite(uint32 cmdAddress, VDP1Command::Control control) {
@@ -3494,7 +3633,122 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        // TODO: implement
+        const VDP1State &state = vdpState.state1;
+
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
+        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10)) + state.localCoordX;
+        const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12)) + state.localCoordY;
+        const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14)) + state.localCoordX;
+        const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16)) + state.localCoordY;
+        const sint32 xd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x18)) + state.localCoordX;
+        const sint32 yd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1A)) + state.localCoordY;
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, yb};
+        const CoordS32 coordC{xc, yc};
+        const CoordS32 coordD{xd, yd};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+            .charAddr = charAddr,
+            .size = size,
+            .flipH = control.flipH,
+        };
+
+        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
+    }
+
+    void VDP1PlotTexturedQuad(VDP1SpanData &data, uint32 cmdAddress, VDP1Command::Control control, CoordS32 coordA,
+                              CoordS32 coordB, CoordS32 coordC, CoordS32 coordD) {
+        QuadStepper quad{coordA, coordB, coordC, coordD};
+
+        if (data.mode.gouraudEnable) {
+            const uint32 gouraudTable = static_cast<uint32>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1C)) << 3u;
+            Color555 gouraudA;
+            Color555 gouraudB;
+            Color555 gouraudC;
+            Color555 gouraudD;
+            gouraudA.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 0u);
+            gouraudB.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 2u);
+            gouraudC.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 4u);
+            gouraudD.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 6u);
+            quad.SetupGouraud(gouraudA, gouraudB, gouraudC, gouraudD);
+        }
+
+        // A width of zero results in the first fetched texel being used for the entire texture.
+        // We simulate this by reducing the texture height to one.
+        const uint32 charSizeH = data.size.H * 8;
+        const uint32 charSizeV = data.size.V;
+        const bool flipV = control.flipV;
+        TextureStepper texVStepper{};
+        quad.SetupTexture(texVStepper, charSizeH == 0 ? 1 : charSizeV, flipV);
+
+        data.texV = charSizeV; // out of range value to ensure first iteration fetches end codes
+
+        // Optimization for the case where the quad goes outside the system clipping area.
+        // Skip rendering the rest of the quad when a line is clipped after plotting at least one line.
+        // The first few lines of the quad could also be clipped; that is accounted for by requiring at least one
+        // plotted line. The point is to skip the calculations once the quad iterator reaches a point where no more
+        // lines can be plotted because they all sit outside the system clip area.
+        //
+        // This also handles a degenerate case with a bowtie quad sitting outside the corner of the screen with two
+        // points poking into the screen area in a configuration similar to this:
+        //
+        //                       D
+        //                        B
+        //   +-----------------+
+        //   |            A    |
+        //   |               C |
+        //   |                 |
+        //   |                 |
+        //   |                 |
+        //   +-----------------+
+        //
+        // In this case, the line gets fully clipped partway through the quad, but comes back into view at the end, so
+        // we need to check for two sequences of plotted lines rather than one.
+        bool linePlotted = false;
+        int plottedSegmentsCount = 0;
+        const int plottedSegmentsMax = quad.IsDegenerate() ? 2 : 1;
+
+        // Interpolate linearly over edges A-D and B-C
+        for (; quad.CanStep(); quad.Step()) {
+            // Plot lines between the interpolated points
+            const CoordS32 coordL = quad.LeftEdge().Coord();
+            const CoordS32 coordR = quad.RightEdge().Coord();
+
+            while (texVStepper.ShouldStepTexel()) {
+                texVStepper.StepTexel();
+            }
+            texVStepper.StepPixel();
+
+            data.texV = texVStepper.Value();
+            if (!data.mode.endCodeDisable) {
+                // TODO: if texV changed, determine end code length from texture in VRAM
+            }
+
+            if (data.mode.gouraudEnable) {
+                data.gouraud0 = quad.LeftEdge().GouraudValue();
+                data.gouraud1 = quad.RightEdge().GouraudValue();
+            }
+
+            if (VDP1AddSpan(coordL, coordR, data, true, true)) {
+                if (!linePlotted) {
+                    linePlotted = true;
+                    ++plottedSegmentsCount;
+                }
+            } else if (plottedSegmentsCount >= plottedSegmentsMax) {
+                // No more lines can be drawn past this point
+                break;
+            } else {
+                linePlotted = false;
+            }
+        }
     }
 
     void VDP1Cmd_DrawPolygon(uint32 cmdAddress) {
@@ -3579,7 +3833,7 @@ struct Direct3D12VDPRenderer::Impl {
                 data.gouraud1 = quad.RightEdge().GouraudValue();
             }
 
-            if (VDP1AddSolidSpan(coordL, coordR, data, true)) {
+            if (VDP1AddSpan(coordL, coordR, data, false, true)) {
                 if (!linePlotted) {
                     linePlotted = true;
                     ++plottedSegmentsCount;
@@ -3637,22 +3891,22 @@ struct Direct3D12VDPRenderer::Impl {
             data.gouraud0 = gouraudA;
             data.gouraud1 = gouraudB;
         }
-        VDP1AddSolidSpan(coordA, coordB, data, false);
+        VDP1AddSpan(coordA, coordB, data, false, false);
         if (mode.gouraudEnable) {
             data.gouraud0 = gouraudB;
             data.gouraud1 = gouraudC;
         }
-        VDP1AddSolidSpan(coordB, coordC, data, false);
+        VDP1AddSpan(coordB, coordC, data, false, false);
         if (mode.gouraudEnable) {
             data.gouraud0 = gouraudC;
             data.gouraud1 = gouraudD;
         }
-        VDP1AddSolidSpan(coordC, coordD, data, false);
+        VDP1AddSpan(coordC, coordD, data, false, false);
         if (mode.gouraudEnable) {
             data.gouraud0 = gouraudD;
             data.gouraud1 = gouraudA;
         }
-        VDP1AddSolidSpan(coordD, coordA, data, false);
+        VDP1AddSpan(coordD, coordA, data, false, false);
     }
 
     void VDP1Cmd_DrawLine(uint32 cmdAddress) {
@@ -3683,7 +3937,7 @@ struct Direct3D12VDPRenderer::Impl {
             data.gouraud1.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 2u);
         }
 
-        VDP1AddSolidSpan(coordA, coordB, data, false);
+        VDP1AddSpan(coordA, coordB, data, false, false);
     }
 
     void VDP1Cmd_SetUserClipping(uint32 cmdAddress) {
