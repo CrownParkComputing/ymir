@@ -546,7 +546,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 #if POLYSPEC_SHADING_GOURAUD
     if (!pixel8Bits) {
         GouraudStepper gouraud;
-        gouraud.Setup(span.length, span.gouraud0, span.gouraud1);
+        gouraud.Setup(lineStepper.Length() + 1, span.gouraud0, span.gouraud1);
         gouraud.Skip(spanStep);
         srcColor = gouraud.Blend(srcColor);
     }
@@ -563,7 +563,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 #endif
 
     spriteData = Color555ToUint16(srcColor);
-    const uint value = spriteData | (spanIndex << 16u);
+    const uint value = spriteData | ((spanIndex + 1u) << 16u);
 
     const int2 coord = lineStepper.Coord();
     const uint outOffset = coord.y * fbSize.x + coord.x;

@@ -13,7 +13,6 @@ struct PolyDrawParams {
 struct PolySpan {
     int2 coord0;
     int2 coord1;
-    uint length;
     uint skip;
     bool antialias;
 

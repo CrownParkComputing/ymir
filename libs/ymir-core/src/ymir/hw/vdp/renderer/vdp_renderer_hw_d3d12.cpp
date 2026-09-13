@@ -869,7 +869,6 @@ struct Direct3D12VDPRenderer::Impl {
     struct VDP1SpanParams {
         HLSLint2 coord0;    // Starting coordinates
         HLSLint2 coord1;    // Ending coordinates
-        HLSLuint length;    // Span length
         HLSLuint skip;      // Initial skip steps
         HLSLbool antialias; // Antialias line
 
@@ -3424,7 +3423,6 @@ struct Direct3D12VDPRenderer::Impl {
         }
 
         // TODO: fix off-by-one error in span length somewhere
-        // TODO: fix frame splicing
         // TODO: test and fix MSB
 
         // TODO: submit spans if the total pixel count will exceed the dispatch limit of 65535*32
@@ -3440,7 +3438,6 @@ struct Direct3D12VDPRenderer::Impl {
 
         const uint32 dx = abs(x1 - x0);
         const uint32 dy = abs(y1 - y0);
-        spanParams.length = length;
         spanParams.skip = skip;
         spanParams.antialias = antialias;
 
@@ -3456,7 +3453,7 @@ struct Direct3D12VDPRenderer::Impl {
         // Update prefix sum
         HLSLuint &nextSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount + 1];
         const HLSLuint currSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount];
-        nextSum = currSum + spanParams.length;
+        nextSum = currSum + length;
 
         // If list is full, flush it
         ++frameCtx.cpuSpanCount;
