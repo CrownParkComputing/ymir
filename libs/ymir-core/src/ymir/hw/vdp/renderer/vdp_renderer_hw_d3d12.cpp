@@ -3411,13 +3411,15 @@ struct Direct3D12VDPRenderer::Impl {
         // Append span to list
         FrameContext &frameCtx = frames.GetCurrentFrame();
         VDP1SpanParams &spanParams = frameCtx.cpuSpanParams[frameCtx.cpuSpanCount];
-        const uint32 length = line.Length();
+        const uint32 length = line.Length() + 1;
         const uint32 skip = line.SystemClip(vdpState.state1.sysClipH, vdpState.state1.sysClipV);
 
-        if (skip >= length) {
+        if (!line.CanStep()) {
             // Entire line was clipped
             return false;
         }
+
+        // TODO: submit spans if the total pixel count will exceed the dispatch limit of 65535*32
 
         const auto [x0, y0] = coord0;
         const auto [x1, y1] = coord1;

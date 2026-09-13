@@ -376,12 +376,13 @@ struct LineStepper {
         }
 
         // NOTE: Shifting counters by this amount forces them to have 13 bits without the need for masking
-        static const int kShift = 32 - 13;
-
-        num <<= kShift;
-        den <<= kShift;
-        accum <<= kShift;
-        accumTarget <<= kShift;
+        // FIXME: breaks SetStep
+        // static const int kShift = 32 - 13;
+        //
+        // num <<= kShift;
+        // den <<= kShift;
+        // accum <<= kShift;
+        // accumTarget <<= kShift;
     }
 
     // Computes how many steps are needed from the start of the line to reach the target pixel.
