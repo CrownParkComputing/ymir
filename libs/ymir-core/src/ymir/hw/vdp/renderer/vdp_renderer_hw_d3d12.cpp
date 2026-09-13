@@ -3253,6 +3253,10 @@ struct Direct3D12VDPRenderer::Impl {
             // No spans to dispatch
             return {};
         }
+        if (vdp1.currPolyDrawShaderIndex == -1) {
+            // No shader selected
+            return {};
+        }
         // Clear spans even if we fail to submit them to avoid crashes on extreme cases.
         // Errors should never happen, however.
         util::ScopeGuard sgClearSpans{[&] { frameCtx.cpuSpanCount = 0; }};
@@ -3375,13 +3379,14 @@ struct Direct3D12VDPRenderer::Impl {
         params.enhancements.transparentMeshes = enhancements.transparentMeshes;
     }
 
-    bool VDP1SelectPolyDrawShader(bool textured, VDP1Command::DrawMode mode) {
+    void VDP1SelectPolyDrawShader(bool textured, VDP1Command::DrawMode mode) {
         // Submit existing spans before switching shaders
         const size_t index = MakeVDP1PolyDrawShaderIndex(textured, mode);
-        const bool changed = vdp1.currPolyDrawShaderIndex != index || vdp1.currPolyDrawShaderMSB != mode.msbOn;
-        vdp1.currPolyDrawShaderIndex = index;
-        vdp1.currPolyDrawShaderMSB = mode.msbOn;
-        return changed;
+        if (vdp1.currPolyDrawShaderIndex != index || vdp1.currPolyDrawShaderMSB != mode.msbOn) {
+            VDP1SubmitSpans();
+            vdp1.currPolyDrawShaderIndex = index;
+            vdp1.currPolyDrawShaderMSB = mode.msbOn;
+        }
     }
 
     bool VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data, bool antialias) {
@@ -3402,9 +3407,7 @@ struct Direct3D12VDPRenderer::Impl {
         }
 
         // Switch polygon drawing shader based on the current settings
-        if (VDP1SelectPolyDrawShader(false, data.mode)) {
-            VDP1SubmitSpans();
-        }
+        VDP1SelectPolyDrawShader(false, data.mode);
 
         // Determine span length
         LineStepper line{coord0, coord1};
@@ -3422,7 +3425,6 @@ struct Direct3D12VDPRenderer::Impl {
 
         // TODO: fix off-by-one error in span length somewhere
         // TODO: fix frame splicing
-        // TODO: fix gouraud shading
         // TODO: test and fix MSB
 
         // TODO: submit spans if the total pixel count will exceed the dispatch limit of 65535*32
