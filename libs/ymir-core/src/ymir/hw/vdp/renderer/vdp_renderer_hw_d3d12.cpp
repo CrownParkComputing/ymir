@@ -30,6 +30,7 @@ CMRC_DECLARE(ymir_core_shaders);
 #include <concepts>
 #include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace ymir::gpu::d3d12;
@@ -476,6 +477,14 @@ struct BarrierTracker {
         return *this;
     }
 
+    /// @brief Registers a buffer UAV barrier.
+    /// @param[in] buffer pointer to the buffer resource
+    /// @return this barrier set
+    BarrierTracker &UAVBuffer(ID3D12Resource *buffer) {
+        m_uavBufferBarriers.insert(buffer);
+        return *this;
+    }
+
     /// @brief Adds a texture barrier to this set.
     ///
     /// `sync*` and `access*` parameters are used with enhanced barriers, while `state*` parameters are used with legacy
@@ -496,6 +505,14 @@ struct BarrierTracker {
             .access = newAccess,
             .layout = newLayout,
         };
+        return *this;
+    }
+
+    /// @brief Registers a texture UAV barrier.
+    /// @param[in] texture pointer to the texture resource
+    /// @return this barrier set
+    BarrierTracker &UAVTexture(ID3D12Resource *texture) {
+        m_uavTextureBarriers.insert(texture);
         return *this;
     }
 
@@ -537,6 +554,18 @@ struct BarrierTracker {
                 m_currentBufferStates[buffer] = newState;
             }
             m_desiredBufferStates.clear();
+            for (ID3D12Resource *buffer : m_uavBufferBarriers) {
+                bufferBarriers.push_back({
+                    .SyncBefore = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
+                    .SyncAfter = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
+                    .AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                    .AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                    .pResource = buffer,
+                    .Offset = 0,
+                    .Size = UINT64_MAX,
+                });
+            }
+            m_uavBufferBarriers.clear();
             if (!bufferBarriers.empty()) {
                 groups.push_back({
                     .Type = D3D12_BARRIER_TYPE_BUFFER,
@@ -581,6 +610,20 @@ struct BarrierTracker {
                 m_currentTextureStates[texture] = newState;
             }
             m_desiredTextureStates.clear();
+            for (ID3D12Resource *texture : m_uavTextureBarriers) {
+                textureBarriers.push_back({
+                    .SyncBefore = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
+                    .SyncAfter = D3D12_BARRIER_SYNC_NON_PIXEL_SHADING,
+                    .AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                    .AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                    .LayoutBefore = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS,
+                    .LayoutAfter = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS,
+                    .pResource = texture,
+                    .Subresources = kTexRangeAll,
+                    .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
+                });
+            }
+            m_uavTextureBarriers.clear();
             if (!textureBarriers.empty()) {
                 groups.push_back({
                     .Type = D3D12_BARRIER_TYPE_TEXTURE,
@@ -653,6 +696,30 @@ struct BarrierTracker {
             }
             m_desiredTextureStates.clear();
 
+            for (ID3D12Resource *resource : m_uavBufferBarriers) {
+                barriers.push_back({
+                    .Type = D3D12_RESOURCE_BARRIER_TYPE_UAV,
+                    .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    .UAV =
+                        {
+                            .pResource = resource,
+                        },
+                });
+            }
+            m_uavBufferBarriers.clear();
+
+            for (ID3D12Resource *resource : m_uavTextureBarriers) {
+                barriers.push_back({
+                    .Type = D3D12_RESOURCE_BARRIER_TYPE_UAV,
+                    .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    .UAV =
+                        {
+                            .pResource = resource,
+                        },
+                });
+            }
+            m_uavTextureBarriers.clear();
+
             cmdList->ResourceBarrier(barriers.size(), barriers.data());
         }
     }
@@ -678,6 +745,9 @@ private:
     };
     std::unordered_map<ID3D12Resource *, TextureState> m_currentTextureStates;
     std::unordered_map<ID3D12Resource *, TextureState> m_desiredTextureStates;
+
+    std::unordered_set<ID3D12Resource *> m_uavBufferBarriers;
+    std::unordered_set<ID3D12Resource *> m_uavTextureBarriers;
 
     /// @brief Retrieves a pointer to the specified command list if enhanced barriers are supported.
     /// @param[in] cmdList the command list
@@ -3250,7 +3320,7 @@ struct Direct3D12VDPRenderer::Impl {
             cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawDescs.gpuHandle);
             cmdList->Dispatch((frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + 63) / 64, 1, 1);
 
-            // MSB shader applies directly to FBRAM
+            // MSB shader applies directly to FBRAM, no merger needed
         } else {
             barrierTracker.Flush(cmdList);
 
@@ -3266,6 +3336,7 @@ struct Direct3D12VDPRenderer::Impl {
 
             barrierTracker.TransitionBuffer(vdp1.fbramBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+            barrierTracker.UAVBuffer(frameCtx.internalSpriteOutBuffer.GetPointer());
             barrierTracker.Flush(cmdList);
 
             // Dispatch output merger shader

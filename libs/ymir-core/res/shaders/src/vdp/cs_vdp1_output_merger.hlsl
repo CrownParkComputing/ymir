@@ -38,10 +38,6 @@ void Merge8(uint2 pos) {
     const uint out1 = internalSpriteOut[inOffset + 1];
     const uint out2 = internalSpriteOut[inOffset + 2];
     const uint out3 = internalSpriteOut[inOffset + 3];
-    internalSpriteOut[inOffset + 0] = 0;
-    internalSpriteOut[inOffset + 1] = 0;
-    internalSpriteOut[inOffset + 2] = 0;
-    internalSpriteOut[inOffset + 3] = 0;
 
     const uint counter0 = BitExtract(out0, 16, 16);
     const uint counter1 = BitExtract(out1, 16, 16);
@@ -51,6 +47,10 @@ void Merge8(uint2 pos) {
         // Nothing written to these pixels
         return;
     }
+    internalSpriteOut[inOffset + 0] = 0;
+    internalSpriteOut[inOffset + 1] = 0;
+    internalSpriteOut[inOffset + 2] = 0;
+    internalSpriteOut[inOffset + 3] = 0;
 
     const uint outOffset = inOffset * 4;
     uint fbramValue = fbramOut.Load(outOffset + fbOffset);
@@ -79,8 +79,6 @@ void Merge16(uint2 pos) {
     // Read and clear internal outputs
     const uint out0 = internalSpriteOut[inOffset + 0];
     const uint out1 = internalSpriteOut[inOffset + 1];
-    internalSpriteOut[inOffset + 0] = 0;
-    internalSpriteOut[inOffset + 1] = 0;
 
     const uint counter0 = BitExtract(out0, 16, 16);
     const uint counter1 = BitExtract(out1, 16, 16);
@@ -88,6 +86,8 @@ void Merge16(uint2 pos) {
         // Nothing written to these pixels
         return;
     }
+    internalSpriteOut[inOffset + 0] = 0;
+    internalSpriteOut[inOffset + 1] = 0;
 
     const uint outOffset = inOffset * 2;
     uint fbramValue = fbramOut.Load(outOffset + fbOffset);
