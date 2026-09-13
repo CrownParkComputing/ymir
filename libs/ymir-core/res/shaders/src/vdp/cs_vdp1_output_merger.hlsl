@@ -52,7 +52,7 @@ void Merge8(uint2 pos) {
     internalSpriteOut[inOffset + 2] = 0;
     internalSpriteOut[inOffset + 3] = 0;
 
-    const uint outOffset = inOffset * 4;
+    const uint outOffset = inOffset;
     uint fbramValue = fbramOut.Load(outOffset + fbOffset);
     if (counter0 != 0) {
         fbramValue &= ~0xFFu;
