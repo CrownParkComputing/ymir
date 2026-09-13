@@ -3487,180 +3487,6 @@ struct Direct3D12VDPRenderer::Impl {
         return true;
     }
 
-    void VDP1Cmd_DrawNormalSprite(uint32 cmdAddress, VDP1Command::Control control) {
-        if (!vdpState.state2.layerEnabled[0]) {
-            return;
-        }
-        const VDP1State &state = vdpState.state1;
-
-        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
-        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
-        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
-        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
-        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
-        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
-        const uint32 charSizeH = size.H * 8;
-        const uint32 charSizeV = size.V;
-
-        const sint32 xb = xa + std::max(charSizeH, 1u) - 1u; // right X
-        const sint32 yb = ya + std::max(charSizeV, 1u) - 1u; // bottom Y
-
-        const CoordS32 coordA{xa, ya};
-        const CoordS32 coordB{xb, ya};
-        const CoordS32 coordC{xb, yb};
-        const CoordS32 coordD{xa, yb};
-
-        VDP1SpanData data{
-            .mode = mode,
-            .color = color,
-            .charAddr = charAddr,
-            .size = size,
-            .flipH = control.flipH,
-        };
-
-        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
-    }
-
-    void VDP1Cmd_DrawScaledSprite(uint32 cmdAddress, VDP1Command::Control control) {
-        if (!vdpState.state2.layerEnabled[0]) {
-            return;
-        }
-
-        const VDP1State &state = vdpState.state1;
-
-        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
-        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
-        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
-        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
-        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
-        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
-
-        // Calculated quad coordinates
-        sint32 qxa = xa;
-        sint32 qya = ya;
-        sint32 qxb = xa;
-        sint32 qyb = ya;
-        sint32 qxc = xa;
-        sint32 qyc = ya;
-        sint32 qxd = xa;
-        sint32 qyd = ya;
-
-        const uint8 zoomPointH = bit::extract<0, 1>(control.zoomPoint);
-        const uint8 zoomPointV = bit::extract<2, 3>(control.zoomPoint);
-
-        if (zoomPointH == 0) {
-            const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14));
-
-            qxb = xc;
-            qxc = xc;
-        } else {
-            const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10));
-
-            switch (zoomPointH) {
-            case 1:
-                qxb += xb;
-                qxc += xb;
-                break;
-            case 2:
-                qxa -= xb >> 1;
-                qxb += (xb + 1) >> 1;
-                qxc += (xb + 1) >> 1;
-                qxd -= xb >> 1;
-                break;
-            case 3:
-                qxa -= xb;
-                qxd -= xb;
-                break;
-            }
-        }
-
-        if (zoomPointV == 0) {
-            const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16));
-
-            qyc = yc;
-            qyd = yc;
-        } else {
-            const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12));
-
-            switch (zoomPointV) {
-            case 1:
-                qyc += yb;
-                qyd += yb;
-                break;
-            case 2:
-                qya -= yb >> 1;
-                qyb -= yb >> 1;
-                qyc += (yb + 1) >> 1;
-                qyd += (yb + 1) >> 1;
-                break;
-            case 3:
-                qya -= yb;
-                qyb -= yb;
-                break;
-            }
-        }
-
-        qxa += state.localCoordX;
-        qya += state.localCoordY;
-        qxb += state.localCoordX;
-        qyb += state.localCoordY;
-        qxc += state.localCoordX;
-        qyc += state.localCoordY;
-        qxd += state.localCoordX;
-        qyd += state.localCoordY;
-
-        const CoordS32 coordA{qxa, qya};
-        const CoordS32 coordB{qxb, qya};
-        const CoordS32 coordC{qxb, qyb};
-        const CoordS32 coordD{qxa, qyb};
-
-        VDP1SpanData data{
-            .mode = mode,
-            .color = color,
-            .charAddr = charAddr,
-            .size = size,
-            .flipH = control.flipH,
-        };
-
-        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
-    }
-
-    void VDP1Cmd_DrawDistortedSprite(uint32 cmdAddress, VDP1Command::Control control) {
-        if (!vdpState.state2.layerEnabled[0]) {
-            return;
-        }
-
-        const VDP1State &state = vdpState.state1;
-
-        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
-        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
-        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
-        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
-        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
-        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
-        const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10)) + state.localCoordX;
-        const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12)) + state.localCoordY;
-        const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14)) + state.localCoordX;
-        const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16)) + state.localCoordY;
-        const sint32 xd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x18)) + state.localCoordX;
-        const sint32 yd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1A)) + state.localCoordY;
-
-        const CoordS32 coordA{xa, ya};
-        const CoordS32 coordB{xb, yb};
-        const CoordS32 coordC{xc, yc};
-        const CoordS32 coordD{xd, yd};
-
-        VDP1SpanData data{
-            .mode = mode,
-            .color = color,
-            .charAddr = charAddr,
-            .size = size,
-            .flipH = control.flipH,
-        };
-
-        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
-    }
-
     void VDP1PlotTexturedQuad(VDP1SpanData &data, uint32 cmdAddress, VDP1Command::Control control, CoordS32 coordA,
                               CoordS32 coordB, CoordS32 coordC, CoordS32 coordD) {
         QuadStepper quad{coordA, coordB, coordC, coordD};
@@ -3746,6 +3572,180 @@ struct Direct3D12VDPRenderer::Impl {
                 linePlotted = false;
             }
         }
+    }
+
+    void VDP1Cmd_DrawNormalSprite(uint32 cmdAddress, VDP1Command::Control control) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+        const VDP1State &state = vdpState.state1;
+
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
+        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const uint32 charSizeH = size.H * 8;
+        const uint32 charSizeV = size.V;
+
+        const sint32 xb = xa + std::max(charSizeH, 1u) - 1u; // right X
+        const sint32 yb = ya + std::max(charSizeV, 1u) - 1u; // bottom Y
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, ya};
+        const CoordS32 coordC{xb, yb};
+        const CoordS32 coordD{xa, yb};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+            .charAddr = charAddr,
+            .size = size,
+            .flipH = control.flipH,
+        };
+
+        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
+    }
+
+    void VDP1Cmd_DrawScaledSprite(uint32 cmdAddress, VDP1Command::Control control) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        const VDP1State &state = vdpState.state1;
+
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
+        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C));
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E));
+
+        // Calculated quad coordinates
+        sint32 qxa = xa;
+        sint32 qya = ya;
+        sint32 qxb = xa;
+        sint32 qyb = ya;
+        sint32 qxc = xa;
+        sint32 qyc = ya;
+        sint32 qxd = xa;
+        sint32 qyd = ya;
+
+        const uint8 zoomPointH = bit::extract<0, 1>(control.zoomPoint);
+        const uint8 zoomPointV = bit::extract<2, 3>(control.zoomPoint);
+
+        if (zoomPointH == 0) {
+            const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14));
+
+            qxb = xc;
+            qxc = xc;
+        } else {
+            const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10));
+
+            switch (zoomPointH) {
+            case 1:
+                qxb += xb;
+                qxc += xb;
+                break;
+            case 2:
+                qxa -= xb >> 1;
+                qxb += (xb + 1) >> 1;
+                qxc += (xb + 1) >> 1;
+                qxd -= xb >> 1;
+                break;
+            case 3:
+                qxa -= xb;
+                qxd -= xb;
+                break;
+            }
+        }
+
+        if (zoomPointV == 0) {
+            const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16));
+
+            qyc = yc;
+            qyd = yc;
+        } else {
+            const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12));
+
+            switch (zoomPointV) {
+            case 1:
+                qyc += yb;
+                qyd += yb;
+                break;
+            case 2:
+                qya -= yb >> 1;
+                qyb -= yb >> 1;
+                qyc += (yb + 1) >> 1;
+                qyd += (yb + 1) >> 1;
+                break;
+            case 3:
+                qya -= yb;
+                qyb -= yb;
+                break;
+            }
+        }
+
+        qxa += state.localCoordX;
+        qya += state.localCoordY;
+        qxb += state.localCoordX;
+        qyb += state.localCoordY;
+        qxc += state.localCoordX;
+        qyc += state.localCoordY;
+        qxd += state.localCoordX;
+        qyd += state.localCoordY;
+
+        const CoordS32 coordA{qxa, qya};
+        const CoordS32 coordB{qxb, qyb};
+        const CoordS32 coordC{qxc, qyc};
+        const CoordS32 coordD{qxd, qyd};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+            .charAddr = charAddr,
+            .size = size,
+            .flipH = control.flipH,
+        };
+
+        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
+    }
+
+    void VDP1Cmd_DrawDistortedSprite(uint32 cmdAddress, VDP1Command::Control control) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        const VDP1State &state = vdpState.state1;
+
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const uint32 charAddr = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x08) << 3u;
+        const VDP1Command::Size size{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0A)};
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10)) + state.localCoordX;
+        const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12)) + state.localCoordY;
+        const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14)) + state.localCoordX;
+        const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16)) + state.localCoordY;
+        const sint32 xd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x18)) + state.localCoordX;
+        const sint32 yd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1A)) + state.localCoordY;
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, yb};
+        const CoordS32 coordC{xc, yc};
+        const CoordS32 coordD{xd, yd};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+            .charAddr = charAddr,
+            .size = size,
+            .flipH = control.flipH,
+        };
+
+        VDP1PlotTexturedQuad(data, cmdAddress, control, coordA, coordB, coordC, coordD);
     }
 
     void VDP1Cmd_DrawPolygon(uint32 cmdAddress) {
