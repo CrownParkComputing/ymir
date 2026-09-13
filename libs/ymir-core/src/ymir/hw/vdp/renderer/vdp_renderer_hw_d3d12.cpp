@@ -889,6 +889,9 @@ struct Direct3D12VDPRenderer::Impl {
     /// @brief Maximum number of spans to send per batch.
     static constexpr size_t kMaxVDP1Spans = 1024;
 
+    /// @brief Maximum number of pixels per dispatch.
+    static constexpr size_t kMaxVDP1PixelsPerDispatch = 1048576;
+
     // The polygon drawing shader uses the span index as a sequence number to enable parallel drawing.
     // This sequence has to fit in the top 16 bits of the output value, limiting the number of span drawn per
     // dispatch. We reserve zero as a special value indicating the previous dispatch's contents (or empty pixels).
@@ -3422,10 +3425,13 @@ struct Direct3D12VDPRenderer::Impl {
             return false;
         }
 
+        // Submit spans now if the total pixel count would exceed the limit
+        if (frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + length >= kMaxVDP1PixelsPerDispatch) {
+            VDP1SubmitSpans();
+        }
+
         // TODO: fix off-by-one error in span length somewhere
         // TODO: test and fix MSB
-
-        // TODO: submit spans if the total pixel count will exceed the dispatch limit of 65535*32
 
         const auto [x0, y0] = coord0;
         const auto [x1, y1] = coord1;
