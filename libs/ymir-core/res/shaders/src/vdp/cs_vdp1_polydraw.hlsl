@@ -553,49 +553,6 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     lineStepper.Setup(span.coord0, span.coord1, span.antialias);
     lineStepper.SetStep(spanStep);
 
-    // Specializations are split into the following blocks:
-    // - MSB [TODO: test and fix]
-    // - Non-MSB
-    //   - Replace or Half-Luminance (HALF_DST==0)
-    //   - Half-Transparency (HALF_DST==1, HALF_SRC==1) [TODO: implement]
-    //   - Shadow (HALF_DST==1, HALF_SRC==0) [TODO: implement]
-
-#if POLYSPEC_MODE_MSB
-    // =========================================================================
-    // MSB
-
-#if POLYSPEC_TEXTURED
-    // TODO: fetch texel to check if it is transparent
-#endif
-
-    // TODO: fix offsets
-
-    // Apply MSB bit
-    const int2 coord = lineStepper.Coord();
-    uint outOffset = coord.y * fbSize.x + coord.x;
-    uint dummy;
-    if (pixel8Bits) {
-        outOffset &= ~1u;
-    } else {
-        outOffset <<= 1u;
-    }
-    WriteOr16(fbramOut, outOffset + fbOffset, 0x8000);
-
-    if (span.antialias && lineStepper.NeedsAA()) {
-        const int2 aaCoord = lineStepper.AACoord();
-        uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
-        if (pixel8Bits) {
-            aaOutOffset &= ~1u;
-        } else {
-            aaOutOffset <<= 1u;
-        }
-        WriteOr16(fbramOut, aaOutOffset + fbOffset, 0x8000);
-    }
-
-#else
-    // =========================================================================
-    // Non-MSB
-
     uint spriteData;
 #if POLYSPEC_TEXTURED
     {
@@ -648,6 +605,43 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         spriteData &= 0xFFu;
     }
 #endif
+
+    // Specializations are split into the following blocks:
+    // - MSB [TODO: test and fix]
+    // - Non-MSB
+    //   - Replace or Half-Luminance (HALF_DST==0)
+    //   - Half-Transparency (HALF_DST==1, HALF_SRC==1) [TODO: implement]
+    //   - Shadow (HALF_DST==1, HALF_SRC==0) [TODO: implement]
+
+#if POLYSPEC_MODE_MSB
+    // =========================================================================
+    // MSB
+
+    // Apply MSB bit
+    const int2 coord = lineStepper.Coord();
+    uint outOffset = coord.y * fbSize.x + coord.x;
+    uint dummy;
+    if (pixel8Bits) {
+        outOffset &= ~1u;
+    } else {
+        outOffset <<= 1u;
+    }
+    WriteOr16(fbramOut, outOffset + fbOffset, 0x8000);
+
+    if (span.antialias && lineStepper.NeedsAA()) {
+        const int2 aaCoord = lineStepper.AACoord();
+        uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
+        if (pixel8Bits) {
+            aaOutOffset &= ~1u;
+        } else {
+            aaOutOffset <<= 1u;
+        }
+        WriteOr16(fbramOut, aaOutOffset + fbOffset, 0x8000);
+    }
+
+#else
+    // =========================================================================
+    // Non-MSB
 
 // Whether the shader needs to modify the source color.
 // Avoids wasting time converting uint16 <-> Color555 when the source color is used as is.
