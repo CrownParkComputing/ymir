@@ -195,7 +195,7 @@ uint3 GetLineColor(uint layer, uint2 pos) {
 int GetColorCalcRatio(uint layer, uint2 pos) {
     switch (layer) {
         case kLayerSprite:
-            return spriteAttrsIn[uint3(pos, 0)];
+            return BitExtract(spriteAttrsIn[uint3(pos, 0)], kSpriteAttrBitColorCalcRatio, 5);
         case kLayerRBG0:
         case kLayerNBG0_RBG1:
         case kLayerNBG1_EXBG:
