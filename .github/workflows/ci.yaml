@@ -134,8 +134,10 @@ jobs:
         arch:
           - name: x64
             runner: ubuntu-24.04
+            vulkan_arch: x86_64
           - name: a64
             runner: ubuntu-24.04-arm
+            vulkan_arch: aarch64
         build-set:
           - name: full
             library-only: "no"
@@ -207,7 +209,7 @@ jobs:
       - name: Configure CMake
         env:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
-          VULKAN_SDK: '/home/runner/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}/aarch64'
+          VULKAN_SDK: '/home/runner/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}/${{ matrix.arch.vulkan_arch }}'
         run: |
           if [ ${{ matrix.build-set.library-only }} = 'no' ]; then
             cmake -B ${{ steps.strings.outputs.build-output-dir }} \

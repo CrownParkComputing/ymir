@@ -291,12 +291,15 @@ jobs:
           - name: "x86_64-SSE2"
             enable_avx2_option: "OFF"
             runner: ubuntu-24.04
+            vulkan_arch: x86_64
           - name: "x86_64-AVX2"
             enable_avx2_option: "ON"
             runner: ubuntu-24.04
+            vulkan_arch: x86_64
           - name: "AArch64-NEON"
             enable_avx2_option: "OFF" # doesn't matter actually
             runner: ubuntu-24.04-arm
+            vulkan_arch: aarch64
         include:
           - compiler: clang
             c_compiler: "clang-18"
@@ -374,6 +377,7 @@ jobs:
       - name: Configure CMake
         env:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
+          VULKAN_SDK: '/home/runner/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}/${{ matrix.architecture.vulkan_arch }}'
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
