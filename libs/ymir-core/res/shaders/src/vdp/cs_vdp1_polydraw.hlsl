@@ -12,6 +12,39 @@
 // - POLYSPEC_SHADING_GOURAUD  [CMDPMOD..2]: 0=flat shading; 1=gouraud shading
 // - POLYSPEC_SHADING_HALF_SRC [CMDPMOD..1]: 0=don't modify source color; 1=halve source color ("half-luminance")
 // - POLYSPEC_SHADING_HALF_DST [CMDPMOD..0]: 0=don't modify destination color; 1=halve destination color ("shadow")
+//
+// Implementation notes:
+// - POLYSPEC_SHADING_HALF_DST and POLYSPEC_SHADING_HALF_SRC specify the blending mode:
+//    DST=0 SRC=0  Replace            dst = src
+//    DST=0 SRC=1  Half-Luminance     dst = src >> 1
+//    DST=1 SRC=0  Shadow             if (dst.msb) { dst = dst >> 1 }
+//    DST=1 SRC=1  Half-Transparency  if (dst.msb) { dst = (dst + src) >> 1 } else { dst = src }
+// - Inputs:
+//   - Span parameters list
+//     - Start and end coordinates and gouraud colors
+//     - Span length in pixels
+//     - Span skip amount in pixels
+//     - Texture V coordinate
+//     - Horizontal flip bit
+//   - Precomputed span length and prefix sums to aid pixel-level indexing
+// - id.x is a pixel-level index into the span sequence
+//   - For example, if the span list contains 3 spans with lengths 10, 12, 14 and skips 0, 0, 10:
+//     - index  0 -> span 0 pixel 0
+//     - index  7 -> span 0 pixel 7
+//     - index  9 -> span 0 pixel 9
+//     - index 10 -> span 1 pixel 0
+//     - index 15 -> span 1 pixel 5
+//     - index 21 -> span 1 pixel 11
+//     - index 22 -> span 2 pixel 10
+//     - index 25 -> span 2 pixel 13 (last)
+//     - index 26 -> out of bounds, discarded
+// - Spans are drawn parallel using order-independent algorithms depending on the blending mode
+//   - MSB applies the bit directly to FBRAM with InterlockedOr (or set bits in a dedicated buffer; check which is faster)
+//   - Replace and Half-Luminance use InterlockedMax with a sequence number to write the latest version of a pixel to the output
+//   - Shadow increments per-pixel counters with InterlockedAdd
+//   - Half-Transparency uses an order-independent transparency algorithm [TBD]
+// - The output merger shader applies the output of this shader to the output FBRAM in 32-bit units (2 or 4 pixels at a time)
+//   - Skipped for MSB (unless using a dedicated buffer)
 
 // Modify these to adjust IntelliSense highlighting
 #ifdef __INTELLISENSE__
@@ -507,39 +540,6 @@ void ReadTexel(uint u, uint v, uint charAddress, uint charSizeH, uint colorMode,
 
 [numthreads(64, 1, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
-    // Implementation notes:
-    // - POLYSPEC_SHADING_HALF_DST and POLYSPEC_SHADING_HALF_SRC specify the blending mode:
-    //    DST=0 SRC=0  Replace            dst = src
-    //    DST=0 SRC=1  Half-Luminance     dst = src >> 1
-    //    DST=1 SRC=0  Shadow             if (dst.msb) { dst = dst >> 1 }
-    //    DST=1 SRC=1  Half-Transparency  if (dst.msb) { dst = (dst + src) >> 1 } else { dst = src }
-    // - Inputs:
-    //   - Span parameters list
-    //     - Start and end coordinates and gouraud colors
-    //     - Span length in pixels
-    //     - Span skip amount in pixels
-    //     - Texture V coordinate
-    //     - Horizontal flip bit
-    //   - Precomputed span length and prefix sums to aid pixel-level indexing
-    // - id.x is a pixel-level index into the span sequence
-    //   - For example, if the span list contains 3 spans with lengths 10, 12, 14 and skips 0, 0, 10:
-    //     - index  0 -> span 0 pixel 0
-    //     - index  7 -> span 0 pixel 7
-    //     - index  9 -> span 0 pixel 9
-    //     - index 10 -> span 1 pixel 0
-    //     - index 15 -> span 1 pixel 5
-    //     - index 21 -> span 1 pixel 11
-    //     - index 22 -> span 2 pixel 10
-    //     - index 25 -> span 2 pixel 13 (last)
-    //     - index 26 -> out of bounds, discarded
-    // - Spans are drawn parallel using order-independent algorithms depending on the blending mode
-    //   - MSB applies the bit directly to FBRAM with InterlockedOr (or set bits in a dedicated buffer; check which is faster)
-    //   - Replace and Half-Luminance use InterlockedMax with a sequence number to write the latest version of a pixel to the output
-    //   - Shadow increments per-pixel counters with InterlockedAdd
-    //   - Half-Transparency uses an order-independent transparency algorithm [TBD]
-    // - The output merger shader applies the output of this shader to the output FBRAM in 32-bit units (2 or 4 pixels at a time)
-    //   - Skipped for MSB (unless using a dedicated buffer)
-
     const uint spanIndex = GetSpanIndex(id.x);
     if (spanIndex == 0xFFFFFFFF) {
         return;
@@ -658,7 +658,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
 #if !POLYSPEC_SHADING_HALF_DST
     // -------------------------------------------------------------------------
-    // Replace of Half-Luminance
+    // Replace or Half-Luminance
 
 #if POLYSPEC_SHADING_HALF_SRC
     if (!pixel8Bits) {
@@ -680,6 +680,8 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     //     discard pixel
     // }
 
+    // TODO: dblInterlaceEnable, dblInterlaceDrawLine, deinterlace
+
     const int2 coord = lineStepper.Coord();
     const uint outOffset = coord.y * fbSize.x + coord.x;
     InterlockedMax(internalSpriteOut[outOffset], value);
@@ -689,7 +691,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
         InterlockedMax(internalSpriteOut[aaOutOffset], value);
     }
-#elif POLYSPEC_SHADING_HALF_SRC
+#elif POLYSPEC_SHADING_HALF_SRC // && POLYSPEC_SHADING_HALF_DST
     // -------------------------------------------------------------------------
     // Half-Transparency
 
@@ -698,7 +700,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // - Linked List
     // - Loop32
     // - Spinlock
-#else
+#else // !POLYSPEC_SHADING_HALF_SRC && POLYSPEC_SHADING_HALF_DST
     // -------------------------------------------------------------------------
     // Shadow
 
