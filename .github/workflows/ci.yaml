@@ -209,7 +209,9 @@ jobs:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
           VULKAN_SDK: '~/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}'
         run: |
-          if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
+          ls -la $VULKAN_SDK
+          ls -la $VULKAN_SDK/bin
+          if [ ${{ matrix.build-set.library-only }} = 'no' ]; then
             cmake -B ${{ steps.strings.outputs.build-output-dir }} \
               -DCMAKE_CXX_COMPILER=clang++-18 \
               -DCMAKE_C_COMPILER=clang-18 \
