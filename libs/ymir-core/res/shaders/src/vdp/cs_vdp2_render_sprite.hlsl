@@ -224,7 +224,7 @@ uint GetSpecialPattern(uint rawData, uint colorDataBits) {
 
     if ((rawData & 0x7FFF) == 0) {
         return kSpriteDataTransparent;
-    } else if (BitExtract(rawData, 0, colorDataBits - 1) == kNormalShadowValue) {
+    } else if (BitExtract(rawData, 0, colorDataBits) == kNormalShadowValue) {
         return kSpriteDataShadow;
     } else {
         return kSpriteDataNormal;
