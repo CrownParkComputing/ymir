@@ -2156,7 +2156,8 @@ struct Direct3D12VDPRenderer::Impl {
 
             auto rootSigBuilder = vdp1.outputMergerRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, sizeof(VDP1CommonRenderParams) / sizeof(uint32));
-            rootSigBuilder.AddDescriptorTable().AddUAVs(2, 0);
+            // NOTE: starting from 1 because SPIRV-Cross assumes buffers in u0 are constant
+            rootSigBuilder.AddDescriptorTable().AddUAVs(2, 1);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
                     fmt::format("Could not build VDP1 output merger root signature, error code {:X}", (uint32)hr)};

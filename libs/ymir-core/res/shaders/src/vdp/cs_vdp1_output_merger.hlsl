@@ -7,8 +7,8 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
     CommonRenderParams g_commonParams;
 }
 
-RWByteAddressBuffer fbramOut : register(u0);
-RWBuffer<uint> internalSpriteOut : register(u1);
+RWByteAddressBuffer fbramOut : register(u1);
+RWBuffer<uint> internalSpriteOut : register(u2);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Parameters
