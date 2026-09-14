@@ -50,7 +50,7 @@
 #ifdef __INTELLISENSE__
 #define POLYSPEC_TEXTURED         1
 #define POLYSPEC_TRANSPARENT_MESH 0
-#define POLYSPEC_MODE_MSB         0
+#define POLYSPEC_MODE_MSB         1
 #define POLYSPEC_SHADING_GOURAUD  1
 #define POLYSPEC_SHADING_HALF_SRC 1
 #define POLYSPEC_SHADING_HALF_DST 0
@@ -84,7 +84,8 @@ static const bool dblInterlaceEnable = BitTest(g_commonParams.displayParams, 4);
 static const bool dblInterlaceDrawLine = BitTest(g_commonParams.displayParams, 5);
 static const bool evenOddCoordSelect = BitTest(g_commonParams.displayParams, 6);
 static const uint drawFB = BitExtract(g_commonParams.displayParams, 7, 1);
-static const bool antialias = BitTest(g_commonParams.displayParams, 8);
+
+static const uint fbOffset = drawFB * kVDP1FBRAMSize;
 
 static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
 
@@ -571,14 +572,24 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     // Apply MSB bit
     const int2 coord = lineStepper.Coord();
-    const uint outOffset = coord.y * fbSize.x + coord.x;
+    uint outOffset = coord.y * fbSize.x + coord.x;
     uint dummy;
-    fbramOut.InterlockedOr(outOffset, 0x8000, dummy);
+    if (pixel8Bits) {
+        outOffset &= ~1u;
+    } else {
+        outOffset <<= 1u;
+    }
+    WriteOr16(fbramOut, outOffset + fbOffset, 0x8000);
 
-    if (span.antialias) {
+    if (span.antialias && lineStepper.NeedsAA()) {
         const int2 aaCoord = lineStepper.AACoord();
-        const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
-        fbramOut.InterlockedOr(aaOutOffset, 0x8000, dummy);
+        uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
+        if (pixel8Bits) {
+            aaOutOffset &= ~1u;
+        } else {
+            aaOutOffset <<= 1u;
+        }
+        WriteOr16(fbramOut, aaOutOffset + fbOffset, 0x8000);
     }
 
 #else

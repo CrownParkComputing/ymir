@@ -19,4 +19,18 @@ uint Read32(ByteAddressBuffer buf, uint address) {
     return ByteSwap32(buf.Load(address & ~3));
 }
 
+void WriteOr8(RWByteAddressBuffer buf, uint address, uint value) {
+    value &= 0xFF;
+    value <<= (address & 3) * 8;
+    uint dummy;
+    buf.InterlockedOr(address & ~3, value, dummy);
+}
+
+void WriteOr16(RWByteAddressBuffer buf, uint address, uint value) {
+    value &= 0xFFFF;
+    value <<= (address & 2) * 8;
+    uint dummy;
+    buf.InterlockedOr(address & ~3, value, dummy);
+}
+
 #endif

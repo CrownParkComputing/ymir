@@ -473,7 +473,7 @@ SpriteOutput DrawSprite(uint2 pos, uint2 outPos, uint index) {
     const uint colorDataOffset = BitExtract(g_commonParams.spriteParams, 16, 3) << 8;
     const uint colorIndex = colorDataOffset + spriteData.colorData;
     const uint4 outColor = FetchCRAMColor(0, colorIndex);
-    const uint outTransparent = (spriteData.special == kSpriteDataTransparent) ? 1 : 0;
+    const bool outTransparent = spriteData.special == kSpriteDataTransparent;
     const uint outPriority = outTransparent && !output.shadowOrWindow
         ? 0
         : BitExtract(g_commonParams.spritePriosRatios, spriteData.priority * 8, 3);

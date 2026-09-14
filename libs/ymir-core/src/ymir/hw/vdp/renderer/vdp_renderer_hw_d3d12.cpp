@@ -2161,7 +2161,7 @@ struct Direct3D12VDPRenderer::Impl {
                 return util::ErrorMessage{
                     fmt::format("Could not build VDP1 output merger root signature, error code {:X}", (uint32)hr)};
             }
-            vdp1.polyDrawRootSig->SetName(L"[Ymir-VDP1] Output merger root signature");
+            vdp1.outputMergerRootSig->SetName(L"[Ymir-VDP1] Output merger root signature");
         }
 
         // -------------------------------------------------------------------------------------------------------------
@@ -3334,7 +3334,7 @@ struct Direct3D12VDPRenderer::Impl {
             cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuPolyDrawParams) / sizeof(uint32),
                                                   &vdp1.cpuPolyDrawParams,
                                                   sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
-            cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawDescs.gpuHandle);
+            cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawMSBDescs.gpuHandle);
             cmdList->Dispatch((frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + 63) / 64, 1, 1);
 
             // MSB shader applies directly to FBRAM, no merger needed
