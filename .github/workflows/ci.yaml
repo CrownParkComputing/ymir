@@ -153,18 +153,26 @@ jobs:
 
       - name: Set up Vulkan SDK
         id: vulkan-sdk
-        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        #if: steps.cache-dxc.outputs.cache-hit != 'true'
         uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
         with:
           vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
           cache: true
 
       - name: Build DXC for Vulkan SDK (AArch64)
-        if: matrix.arch.name == 'a64' && steps.cache-dxc.outputs.cache-hit != 'true'
+        if: matrix.arch.name == 'a64' # && steps.cache-dxc.outputs.cache-hit != 'true'
         shell: bash
         run: |
           cd $VULKAN_SDK/..
           ./vulkansdk --skip-deps --maxjobs dxc
+
+      - name: Test
+        shell: bash
+        run: |
+          echo $VULKAN_SDK
+          ls -la /home/runner/work/Ymir/Ymir
+          ls -la $VULKAN_SDK
+          ls -la $VULKAN_SDK/bin
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -209,8 +217,6 @@ jobs:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
           VULKAN_SDK: '~/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}'
         run: |
-          ls -la $VULKAN_SDK
-          ls -la $VULKAN_SDK/bin
           if [ ${{ matrix.build-set.library-only }} = 'no' ]; then
             cmake -B ${{ steps.strings.outputs.build-output-dir }} \
               -DCMAKE_CXX_COMPILER=clang++-18 \
