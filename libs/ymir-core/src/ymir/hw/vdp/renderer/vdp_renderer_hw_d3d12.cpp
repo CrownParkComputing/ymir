@@ -2860,7 +2860,7 @@ struct Direct3D12VDPRenderer::Impl {
             // VDP2 sprite attributes 2D texture array
             {
                 static constexpr UINT16 kNumLayers = 2;
-                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8_UINT;
+                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R16_UINT;
 
                 auto builder = frameCtx.spriteAttrsTexture.Texture2DBuilder(kMaxResH, kMaxResV, kNumLayers);
                 builder.Format(kFormat);

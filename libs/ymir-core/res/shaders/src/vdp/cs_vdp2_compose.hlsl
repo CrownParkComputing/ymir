@@ -292,7 +292,7 @@ uint3 Compose(uint2 basePos) {
         // Skip normal shadow sprite layer pixels
         if (layer == kLayerSprite) {
             const uint spriteAttrs = spriteAttrsIn[uint3(pos, 0)];
-            if (BitTest(spriteAttrs, kSpriteAttrBitNormalShadow)) {
+            if (BitExtract(spriteAttrs, kSpriteAttrBitSpecial, 2) != kSpriteDataNormal) {
                 continue;
             }
         }
@@ -323,7 +323,7 @@ uint3 Compose(uint2 basePos) {
         meshPixel = meshOutput.rgb;
         const Attributes meshAttrs = ToAttributes(meshOutput.a);
         const uint meshSpriteAttrs = spriteAttrsIn[uint3(pos, 1)];
-        if (meshAttrs.priority > 0 && !BitTest(meshSpriteAttrs, kSpriteAttrBitNormalShadow)) {
+        if (meshAttrs.priority > 0 && BitExtract(meshSpriteAttrs, kSpriteAttrBitSpecial, 2) != kSpriteDataShadow) {
             for (uint i = 0; i < 3; i++) {
                 // The sprite layer has the highest priority on ties, so the priority check can be simplified.
                 // Sprite pixels drawn of top of mesh pixels erase the corresponding pixels from the mesh layer,
@@ -416,7 +416,7 @@ uint3 Compose(uint2 basePos) {
     if (spritePriority >= layerPrios[0]) {
         const uint spriteAttrs = spriteAttrsIn[uint3(pos, 0)];
         const bool useSpriteWindow = BitTest(g_commonParams.spriteParams, 19);
-        const bool isNormalShadow = BitTest(spriteAttrs, kSpriteAttrBitNormalShadow);
+        const bool isNormalShadow = BitExtract(spriteAttrs, kSpriteAttrBitSpecial, 2) == kSpriteDataShadow;
         const bool isMSBShadow = !useSpriteWindow && BitTest(spriteAttrs, kSpriteAttrBitShadowWindow);
         if (isNormalShadow || isMSBShadow) {
             output >>= 1;

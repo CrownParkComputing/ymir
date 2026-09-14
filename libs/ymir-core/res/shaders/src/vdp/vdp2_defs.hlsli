@@ -61,7 +61,11 @@ static const uint kPixelAttrBitSpecColorCalc = 7;
 static const uint kSpriteAttrBitColorCalcRatio = 0; // bits 0 to 4
 static const uint kSpriteAttrBitColorMSB = 5;
 static const uint kSpriteAttrBitShadowWindow = 6;
-static const uint kSpriteAttrBitNormalShadow = 7;
+static const uint kSpriteAttrBitSpecial = 7; // bits 7 to 8
+
+static const uint kSpriteDataNormal = 0; // Any other value
+static const uint kSpriteDataShadow = 1; // Normal shadow pattern (DC=0b...11110)
+static const uint kSpriteDataTransparent = 2; // Raw 16-bit value is 0x0000
 
 static const uint kColorGradScreenSprite = 0;
 static const uint kColorGradScreenRBG0 = 1;

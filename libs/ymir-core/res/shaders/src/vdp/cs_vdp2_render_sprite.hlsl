@@ -210,10 +210,6 @@ uint2 CalcRotationSpriteCoordinates(uint2 pos) {
 // ---------------------------------------------------------------------------------------------------------------------
 // Sprite data
 
-static const uint kSpriteDataNormal = 0; // Any other value
-static const uint kSpriteDataShadow = 1; // Normal shadow pattern (DC=0b...11110)
-static const uint kSpriteDataTransparent = 2; // Raw 16-bit value is 0x0000
-
 struct SpriteData {
     uint colorData; // DC10-0
     uint colorCalcRatio; // CC2-0
@@ -395,7 +391,7 @@ struct SpriteOutput {
     uint colorCalcRatio;
     bool colorMSB;
     bool shadowOrWindow;
-    bool normalShadow;
+    uint special;
 };
 
 // index 0 = sprite
@@ -485,7 +481,7 @@ SpriteOutput DrawSprite(uint2 pos, uint2 outPos, uint index) {
     output.colorCalcRatio = BitExtract(g_commonParams.spritePriosRatios, spriteData.colorCalcRatio * 8 + 3, 5);
     output.colorMSB = outColor.a != 0;
     output.shadowOrWindow = spriteData.shadowOrWindow;
-    output.normalShadow = spriteData.special == kSpriteDataShadow;
+    output.special = spriteData.special;
     return output;
 }
 
@@ -503,5 +499,5 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         output.colorCalcRatio |
         ((output.colorMSB ? 1u : 0u) << kSpriteAttrBitColorMSB) |
         ((output.shadowOrWindow ? 1u : 0u) << kSpriteAttrBitShadowWindow) |
-        ((output.normalShadow ? 1u : 0u) << kSpriteAttrBitNormalShadow);
+        (output.special << kSpriteAttrBitSpecial);
 }
