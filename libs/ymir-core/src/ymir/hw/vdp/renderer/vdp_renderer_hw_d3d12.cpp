@@ -2129,8 +2129,8 @@ struct Direct3D12VDPRenderer::Impl {
             rootSigBuilder.Add32BitConstants(0, (sizeof(VDP1CommonRenderParams) + sizeof(VDP1PolyDrawParams)) /
                                                     sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(3, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
-                .AddUAVs(1, 0);
+                .AddSRVs(3, 1)  // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddUAVs(1, 1); // NOTE: starting from 1 because SPIRV-Cross assumes buffers in u0 are constant
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
                     fmt::format("Could not build VDP1 polygon drawing root signature, error code {:X}", (uint32)hr)};

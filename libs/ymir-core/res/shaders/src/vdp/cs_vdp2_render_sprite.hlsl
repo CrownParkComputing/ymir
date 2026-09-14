@@ -228,7 +228,7 @@ uint GetSpecialPattern(uint rawData, uint colorDataBits) {
 
     if ((rawData & 0x7FFF) == 0) {
         return kSpriteDataTransparent;
-    } else if (BitExtract(rawData, 0, colorDataBits) == kNormalShadowValue) {
+    } else if (BitExtract(rawData, 0, colorDataBits - 1) == kNormalShadowValue) {
         return kSpriteDataShadow;
     } else {
         return kSpriteDataNormal;
@@ -474,7 +474,7 @@ SpriteOutput DrawSprite(uint2 pos, uint2 outPos, uint index) {
     const uint colorIndex = colorDataOffset + spriteData.colorData;
     const uint4 outColor = FetchCRAMColor(0, colorIndex);
     const bool outTransparent = spriteData.special == kSpriteDataTransparent;
-    const uint outPriority = outTransparent && !output.shadowOrWindow
+    const uint outPriority = outTransparent && !spriteData.shadowOrWindow
         ? 0
         : BitExtract(g_commonParams.spritePriosRatios, spriteData.priority * 8, 3);
 

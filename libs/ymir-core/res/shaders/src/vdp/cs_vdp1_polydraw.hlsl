@@ -66,9 +66,9 @@ Buffer<uint> spanPrefixSums : register(t2);
 ByteAddressBuffer vram : register(t3);
 
 #if POLYSPEC_MODE_MSB
-RWByteAddressBuffer fbramOut : register(u0);
+RWByteAddressBuffer fbramOut : register(u1);
 #else
-RWBuffer<uint> internalSpriteOut : register(u0);
+RWBuffer<uint> internalSpriteOut : register(u1);
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
