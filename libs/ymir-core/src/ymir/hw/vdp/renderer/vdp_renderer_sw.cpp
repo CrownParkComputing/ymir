@@ -4189,13 +4189,17 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         for (uint32 x = 0; Color888 &outputColor : framebufferOutput) {
             if (layer0ColorOffsetEnabled[x]) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[scanline_layers[x][0]]];
-                outputColor = {
-                    .r = kColorOffsetLUT[colorOffset.r][outputColor.r],
-                    .g = kColorOffsetLUT[colorOffset.g][outputColor.g],
-                    .b = kColorOffsetLUT[colorOffset.b][outputColor.b],
-                    .pad = 0,
-                    .msb = 0,
-                };
+                // Field-by-field rather than `outputColor = { .r = ..., .g = ...,
+                // .b = ... }`: the brace-init assignment to a union trips
+                // Apple Clang 15 in Xcode 15.4 ("no viable overloaded '='").
+                // Direct field assignment compiles cleanly on every clang
+                // version tested and matches the style already used in this
+                // file (e.g. the dstColor writes around line 1081).
+                outputColor.r = kColorOffsetLUT[colorOffset.r][outputColor.r];
+                outputColor.g = kColorOffsetLUT[colorOffset.g][outputColor.g];
+                outputColor.b = kColorOffsetLUT[colorOffset.b][outputColor.b];
+                outputColor.pad = 0;
+                outputColor.msb = 0;
             }
             ++x;
         }
@@ -4247,13 +4251,15 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             for (uint32 x = 0; Color888 &meshColor : meshOut) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[LYR_Sprite]];
                 if (colorOffset.nonZero) {
-                    meshColor = {
-                        .r = kColorOffsetLUT[colorOffset.r][meshColor.r],
-                        .g = kColorOffsetLUT[colorOffset.g][meshColor.g],
-                        .b = kColorOffsetLUT[colorOffset.b][meshColor.b],
-                        .pad = 0,
-                        .msb = 0,
-                    };
+                    // See the matching note on the outputColor colour-offset
+                    // block above. Apple Clang 15 does not accept a
+                    // designated-init-list as the right-hand side of an
+                    // assignment to a union type, so we go field-by-field.
+                    meshColor.r = kColorOffsetLUT[colorOffset.r][meshColor.r];
+                    meshColor.g = kColorOffsetLUT[colorOffset.g][meshColor.g];
+                    meshColor.b = kColorOffsetLUT[colorOffset.b][meshColor.b];
+                    meshColor.pad = 0;
+                    meshColor.msb = 0;
                 }
                 ++x;
             }
