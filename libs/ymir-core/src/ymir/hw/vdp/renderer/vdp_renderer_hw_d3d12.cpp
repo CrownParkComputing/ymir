@@ -882,8 +882,9 @@ struct Direct3D12VDPRenderer::Impl {
         HLSLuint charAddr; // CMDSRCA value * 8 (textured only)
 
         // Textured only parameters
-        HLSLuint texV;  // Texture V coordinate
-        HLSLbool flipH; // Horizontal flip
+        HLSLuint texV;         // Texture V coordinate
+        HLSLbool flipH;        // Horizontal flip
+        HLSLuint endCodeIndex; // U coordinate of the second end code
     };
 
     /// @brief Maximum number of spans to send per batch.
@@ -3305,6 +3306,7 @@ struct Direct3D12VDPRenderer::Impl {
         VDP1Command::Size size;
         uint32 texV;
         bool flipH;
+        uint32 endCodeIndex;
     };
 
     util::VoidResult<> VDP1SubmitSpans() {
@@ -3520,6 +3522,7 @@ struct Direct3D12VDPRenderer::Impl {
 
             spanParams.texV = data.texV;
             spanParams.flipH = data.flipH;
+            spanParams.endCodeIndex = data.endCodeIndex;
         }
 
         // Update prefix sum
@@ -3589,6 +3592,71 @@ struct Direct3D12VDPRenderer::Impl {
         int plottedSegmentsCount = 0;
         const int plottedSegmentsMax = quad.IsDegenerate() ? 2 : 1;
 
+        auto findEndCodeIndex = [&](uint32 v) -> uint32 {
+            if (data.mode.endCodeDisable) {
+                return charSizeH;
+            }
+
+            int endCodeCount = 0;
+
+            for (uint32 i = 0; i < charSizeH; ++i) {
+                const uint32 u = control.flipH ? charSizeH - 1 - i : i;
+
+                const uint32 charIndex = u + v * charSizeH;
+
+                auto processEndCode = [&](bool endCode) -> bool {
+                    if (endCode && !data.mode.endCodeDisable) {
+                        ++endCodeCount;
+                    }
+                    return endCodeCount >= 2;
+                };
+
+                // Read next texel
+                uint32 color;
+                switch (data.mode.colorMode) {
+                case 0: // 4 bpp, 16 colors, bank mode
+                    color = vdpState.mem1.ReadVRAM<uint8>(data.charAddr + (charIndex >> 1));
+                    color = (color >> ((~u & 1) * 4)) & 0xF;
+                    if (processEndCode(color == 0xF)) {
+                        return u;
+                    }
+                    break;
+                case 1: // 4 bpp, 16 colors, lookup table mode
+                    color = vdpState.mem1.ReadVRAM<uint8>(data.charAddr + (charIndex >> 1));
+                    color = (color >> ((~u & 1) * 4)) & 0xF;
+                    if (processEndCode(color == 0xF)) {
+                        return u;
+                    }
+                    break;
+                case 2: // 8 bpp, 64 colors, bank mode
+                    color = vdpState.mem1.ReadVRAM<uint8>(data.charAddr + charIndex);
+                    if (processEndCode(color == 0xFF)) {
+                        return u;
+                    }
+                    break;
+                case 3: // 8 bpp, 128 colors, bank mode
+                    color = vdpState.mem1.ReadVRAM<uint8>(data.charAddr + charIndex);
+                    if (processEndCode(color == 0xFF)) {
+                        return u;
+                    }
+                    break;
+                case 4: // 8 bpp, 256 colors, bank mode
+                    color = vdpState.mem1.ReadVRAM<uint8>(data.charAddr + charIndex);
+                    if (processEndCode(color == 0xFF)) {
+                        return u;
+                    }
+                    break;
+                case 5: // 16 bpp, 32768 colors, RGB mode
+                    color = vdpState.mem1.ReadVRAM<uint16>(data.charAddr + charIndex * sizeof(uint16));
+                    if (processEndCode(color == 0x7FFF)) {
+                        return u;
+                    }
+                    break;
+                }
+            };
+            return charSizeH;
+        };
+
         // Interpolate linearly over edges A-D and B-C
         for (; quad.CanStep(); quad.Step()) {
             // Plot lines between the interpolated points
@@ -3600,9 +3668,10 @@ struct Direct3D12VDPRenderer::Impl {
             }
             texVStepper.StepPixel();
 
-            data.texV = texVStepper.Value();
-            if (!data.mode.endCodeDisable) {
-                // TODO: if texV changed, determine end code length from texture in VRAM
+            const uint32 newTexV = texVStepper.Value();
+            if (newTexV != data.texV) {
+                data.texV = newTexV;
+                data.endCodeIndex = findEndCodeIndex(newTexV);
             }
 
             if (data.mode.gouraudEnable) {

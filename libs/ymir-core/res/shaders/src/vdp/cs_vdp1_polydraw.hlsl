@@ -531,7 +531,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         uint endCodeIndex;
         bool checkEndCodes;
         if (endCodesEnabled && !useHighSpeedShrink) {
-            endCodeIndex = charSizeH; // TODO: use end code length computed from CPU side
+            endCodeIndex = span.endCodeIndex;
             checkEndCodes = endCodeIndex < charSizeH;
         } else {
             checkEndCodes = false;

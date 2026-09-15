@@ -26,6 +26,7 @@ struct PolySpan {
 
     uint texV;
     bool flipH;
+    uint endCodeIndex;
 };
 
 #endif
