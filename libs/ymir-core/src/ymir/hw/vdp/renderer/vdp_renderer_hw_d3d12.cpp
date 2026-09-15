@@ -3406,7 +3406,6 @@ struct Direct3D12VDPRenderer::Impl {
 
             // Insert UAV barrier to ensure the following shaders see these changes
             barrierTracker.UAVBuffer(vdp1.fbramBuffer.GetPointer());
-            barrierTracker.Flush(cmdList);
         }
     }
 
@@ -3500,6 +3499,8 @@ struct Direct3D12VDPRenderer::Impl {
                                         D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(),
                                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionBuffer(vdp1.vramBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                         D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         barrierTracker.TransitionBuffer(frameCtx.internalSpriteOutBuffer.GetPointer(),
                                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
@@ -5093,6 +5094,8 @@ struct Direct3D12VDPRenderer::Impl {
         barrierTracker.TransitionTexture(frameCtx.spriteAttrsTexture.GetPointer(),
                                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                                          D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.TransitionBuffer(vdp1.fbramBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         barrierTracker.Flush(cmdList);
 
         // Draw sprite layer
