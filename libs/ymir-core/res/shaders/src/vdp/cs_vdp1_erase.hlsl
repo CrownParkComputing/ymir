@@ -54,7 +54,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         }
         // A partial write occurs if the last VBlank erase occurs at an odd X coordinate.
         // This means we have to write only the first 16-bit word and leave the second word untouched.
-        partialWrite = pos.x + 1 > vblankEraseMaxX;
+        partialWrite = pos.y == vblankEraseMaxY && pos.x + 1 > vblankEraseMaxX;
     }
 
 
