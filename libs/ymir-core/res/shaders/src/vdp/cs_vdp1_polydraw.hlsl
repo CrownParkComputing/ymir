@@ -51,7 +51,7 @@
 #define POLYSPEC_SHADING_HALF_DST 0
 #endif
 
-cbuffer CommonRenderParamsBuffer : register(b0) {
+cbuffer RenderParamsBuffer : register(b0) {
     CommonRenderParams g_commonParams;
     PolyDrawParams g_polyDrawParams;
 }

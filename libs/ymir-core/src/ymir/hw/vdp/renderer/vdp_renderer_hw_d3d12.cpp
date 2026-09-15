@@ -836,14 +836,16 @@ struct Direct3D12VDPRenderer::Impl {
         } coords;
         static_assert(sizeof(Coords) == sizeof(HLSLuint));
 
-        HLSLuint writeValue; // Erase write value
+        struct Erase {                 //  bits  use
+            HLSLuint writeValue : 16;  //  0-15  Erase write value
+            HLSLuint addressShift : 1; //    16  Erase address shift (coordY << (x + 8))
+        } erase;
 
-        struct VBlankEraseParams {          //  bits  use
-            HLSLuint vblankErase : 1;       //     0  VBlank erase active
-            HLSLuint vblankEraseMaxY : 9;   //   1-9  Last VBlank erase line
-            HLSLuint vblankEraseMaxX : 10;  // 10-19  Last VBlank erase pixel in line
-            HLSLuint eraseAddressShift : 1; //    20  Erase address shift (coordY << (x + 8))
-        } vblankEraseParams;
+        struct VBlankEraseParams { //  bits  use
+            HLSLuint enable : 1;   //     0  VBlank erase active
+            HLSLuint maxY : 9;     //   1-9  Last VBlank erase line
+            HLSLuint maxX : 10;    // 10-19  Last VBlank erase pixel in line
+        } vblank;
         static_assert(sizeof(VBlankEraseParams) == sizeof(HLSLuint));
     };
 
@@ -955,6 +957,11 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief Polygon drawing parameters, uploaded as 32-bit root constants.
         VDP1PolyDrawParams cpuPolyDrawParams{};
 
+        /// @brief Compute shader for erasing the framebuffer.
+        gpu::ComputeShader eraseShader;
+        /// @brief Root signature for erasing the framebuffer.
+        D3D12RootSignature eraseRootSig;
+
         // The polygon drawing shader operates on consecutive polygons span batches that share the same properties:
         // - System and user clipping areas
         // - CMDPMOD, CMDCOLR, CMDSRCA and CMDSIZE values
@@ -998,6 +1005,9 @@ struct Direct3D12VDPRenderer::Impl {
         size_t currOutputMergerShaderIndex = -1;
         // Whether the currently active polygon drawing shader is an MSB or non-MSB variant
         bool currPolyDrawShaderMSB = false;
+
+        // Whether to execute the erase process on next swap
+        bool doErase = false;
     } vdp1;
 
     /// @brief Constructs a polygon drawing shader index from its variant options.
@@ -1750,6 +1760,11 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief Internal sprite data output buffer UAV (offline).
         DescriptorRange internalSpriteOutUAV;
 
+        /// @brief Descriptor range for erasing the framebuffer.
+        DescriptorRange eraseDescs;
+        /// @brief Pipeline state object for erasing the framebuffer.
+        D3D12PipelineState erasePSO;
+
         /// @brief Descriptor range for drawing polygons (non-MSB variants).
         DescriptorRange polyDrawDescs;
         /// @brief Pipeline state objects for drawing polygons (non-MSB variants).
@@ -2112,6 +2127,23 @@ struct Direct3D12VDPRenderer::Impl {
         // -------------------------------------------------------------------------------------------------------------
         // Shaders and root signatures
 
+        // Framebuffer erase
+        {
+            auto shaderBlobResult = LoadShader("src/vdp/cs_vdp1_erase.cso");
+            if (!shaderBlobResult) {
+                return util::ErrorMessage{fmt::format("Could not load VDP1 framebuffer erase compute shader: {}",
+                                                      shaderBlobResult.Error().message)};
+            }
+            vdp1.eraseShader.format = gpu::ShaderBytecodeFormat::DXIL;
+            vdp1.eraseShader.bytecode = shaderBlobResult.Value();
+            vdp1.eraseShader.entrypoint = kCSEntrypoint;
+            auto result = gpu::ValidateShader(vdp1.eraseShader);
+            if (!result) {
+                return util::ErrorMessage{
+                    fmt::format("VDP1 framebuffer erase compute shader validation failed: {}", result.Error().message)};
+            }
+        }
+
         // Polygon drawing (non-MSB variants)
         for (size_t shaderIndex = 0; shaderIndex < vdp1.polyDrawShaders.size(); ++shaderIndex) {
             const auto [meshMode, textured, gouraud, halfSrc, halfDst] = ExpandPolyDrawShaderIndex(shaderIndex);
@@ -2155,6 +2187,20 @@ struct Direct3D12VDPRenderer::Impl {
                     fmt::format("VDP1 MSB polygon drawing compute shader variant {} validation failed: {}", shaderIndex,
                                 result.Error().message)};
             }
+        }
+
+        // Framebuffer erase root signature.
+        {
+            auto rootSigBuilder = vdp1.eraseRootSig.Builder();
+            rootSigBuilder.Add32BitConstants(0, (sizeof(VDP1CommonRenderParams) + sizeof(VDP1EraseParams)) /
+                                                    sizeof(uint32));
+            // NOTE: starting from 1 because SPIRV-Cross assumes buffers in u0 are constant
+            rootSigBuilder.AddDescriptorTable().AddUAVs(1, 1);
+            if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not build VDP1 framebuffer erase root signature, error code {:X}", (uint32)hr)};
+            }
+            vdp1.eraseRootSig->SetName(L"[Ymir-VDP1] Framebuffer erase root signature");
         }
 
         // Polygon drawing root signature.
@@ -2319,6 +2365,35 @@ struct Direct3D12VDPRenderer::Impl {
                 };
                 device->CreateUnorderedAccessView(frameCtx.internalSpriteOutBuffer.GetPointer(), nullptr, &uavDesc,
                                                   frameCtx.internalSpriteOutUAV.cpuHandle);
+            }
+
+            // Framebuffer erase
+            {
+                const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
+                    .pRootSignature = vdp1.eraseRootSig.GetPointer(),
+                    .CS = ToShaderBytecode(vdp1.eraseShader),
+                };
+                if (HRESULT hr = frameCtx.erasePSO.CreateCompute(device, psoDesc); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not build VDP1 framebuffer erase pipeline state object #{}, error code {:X}",
+                                    i, (uint32)hr)};
+                }
+                frameCtx.erasePSO->SetName(
+                    fmt::format(L"[Ymir-VDP1] Framebuffer erase pipeline state object #{}", i).c_str());
+
+                const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
+                    vdp1.fbramUAV.cpuHandle,
+                };
+                std::array<UINT, std::size(srcHandles)> srcSizes{};
+                srcSizes.fill(1);
+
+                if (!resourceHeapAlloc.Allocate(frameCtx.eraseDescs, std::size(srcHandles))) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP1 framebuffer erase descriptors #{}", i)};
+                }
+
+                device->CopyDescriptors(1, &frameCtx.eraseDescs.cpuHandle, &frameCtx.eraseDescs.count,
+                                        std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
             }
 
             // Polygon drawing (non-MSB variants)
@@ -3262,14 +3337,77 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP1EraseFramebuffer(uint64 cycles) {
-        // TODO: setup framebuffer erase, run erase shader
+        vdp1.doErase = true;
+
+        // Vertical scale is doubled in double-interlace mode
+        const VDP1Regs &regs1 = vdpState.regs1;
+        const VDP2Regs &regs2 = vdpState.regs2;
+        const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
+        const uint32 scaleV = doubleDensity ? 1u : 0u;
+
+        // Constrain erase area to certain limits based on current resolution
+        const uint32 maxH = (regs2.TVMD.HRESOn & 1) ? 428 : 400;
+        const uint32 maxV = VRes >> scaleV;
+
+        vdp1.cpuEraseParams.coords.x1 = std::min<uint32>(regs1.eraseX1Latch, maxH) >> 3u;
+        vdp1.cpuEraseParams.coords.y1 = std::min<uint32>(regs1.eraseY1Latch, maxV);
+        vdp1.cpuEraseParams.coords.x3 = std::min<uint32>(regs1.eraseX3Latch, maxH) >> 3u;
+        vdp1.cpuEraseParams.coords.y3 = std::min<uint32>(regs1.eraseY3Latch, maxV);
+        vdp1.cpuEraseParams.coords.scaleV = scaleV;
+
+        vdp1.cpuEraseParams.erase.writeValue = regs1.eraseWriteValueLatch;
+        vdp1.cpuEraseParams.erase.addressShift = regs1.eraseOffsetShift - 8;
+
+        vdp1.cpuEraseParams.vblank.enable = cycles != 0;
+        if (vdp1.cpuEraseParams.vblank.enable) {
+            // Compute last line and pixel that can be drawn with the given cycle budget
+            const uint32 lineWidth = (vdp1.cpuEraseParams.coords.x3 << 3u) - (vdp1.cpuEraseParams.coords.x1 << 3u);
+            if (lineWidth > 0) {
+                vdp1.cpuEraseParams.vblank.maxY = cycles / lineWidth;
+                vdp1.cpuEraseParams.vblank.maxX = cycles % lineWidth;
+            } else {
+                vdp1.cpuEraseParams.vblank.maxY = 0;
+                vdp1.cpuEraseParams.vblank.maxX = 0;
+            }
+        }
     }
 
     void VDP1SwapFramebuffer() {
         // Submit any pending spans
         VDP1SubmitSpans();
 
-        // TODO: swap framebuffer
+        // Do framebuffer erase
+        if (vdp1.doErase) {
+            vdp1.doErase = false;
+            const auto &erase = vdp1.cpuEraseParams;
+            const uint32 width = (erase.coords.x3 << 3) - (erase.coords.x1 << 3) + 1;
+            const uint32 height = erase.coords.y3 - erase.coords.y1 + 1;
+
+            FrameContext &frameCtx = frames.GetCurrentFrame();
+
+            VDP1UpdateCommonRenderParams();
+            vdp1.cpuCommonRenderParams.displayParams.drawFB = vdpState.displayFB;
+
+            // Transition FBRAM to UAV usage
+            barrierTracker.TransitionBuffer(vdp1.fbramBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+            barrierTracker.Flush(cmdList);
+
+            // Dispatch erase shader
+            cmdList->SetPipelineState(frameCtx.erasePSO.GetPointer());
+            cmdList->SetComputeRootSignature(vdp1.eraseRootSig.GetPointer());
+            cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
+                                                  &vdp1.cpuCommonRenderParams, 0);
+            cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuEraseParams) / sizeof(uint32), &vdp1.cpuEraseParams,
+                                                  sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
+            cmdList->SetComputeRootDescriptorTable(1, frameCtx.eraseDescs.gpuHandle);
+            cmdList->Dispatch((width + 63) / 64, (height + 31) / 32, 1);
+            // NOTE: works on 32-bit units, so two writes per thread, hence why (width+63)/64 instead of +31/32
+
+            // Insert UAV barrier to ensure the following shaders see these changes
+            barrierTracker.UAVBuffer(vdp1.fbramBuffer.GetPointer());
+            barrierTracker.Flush(cmdList);
+        }
     }
 
     void VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Control control) {

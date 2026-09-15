@@ -400,6 +400,8 @@ set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 #   <variant> specifies an optional variant name for the shader
 #   <macro> defines macros for that variant
 set(COMPUTE_SHADER_SOURCES
+    res/shaders/src/vdp/cs_vdp1_erase.hlsl
+
     res/shaders/src/vdp/cs_vdp2_compose.hlsl
     res/shaders/src/vdp/cs_vdp2_render_bgs.hlsl
     res/shaders/src/vdp/cs_vdp2_render_sprite.hlsl

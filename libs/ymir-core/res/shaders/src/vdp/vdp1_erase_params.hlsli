@@ -5,8 +5,8 @@
 
 struct EraseParams {
     uint coords;
-    uint writeValue;
-    uint vblankEraseParams;
+    uint erase;
+    uint vblank;
 };
 
 #endif

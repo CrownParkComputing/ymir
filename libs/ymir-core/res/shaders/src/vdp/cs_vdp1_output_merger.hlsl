@@ -17,7 +17,7 @@
 #define POLYSPEC_MERGE_MODE       1
 #endif
 
-cbuffer CommonRenderParamsBuffer : register(b0) {
+cbuffer RenderParamsBuffer : register(b0) {
     CommonRenderParams g_commonParams;
 }
 
