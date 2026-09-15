@@ -50,7 +50,7 @@
 #ifdef __INTELLISENSE__
 #define POLYSPEC_TEXTURED         1
 #define POLYSPEC_TRANSPARENT_MESH 0
-#define POLYSPEC_MODE_MSB         1
+#define POLYSPEC_MODE_MSB         0
 #define POLYSPEC_SHADING_GOURAUD  1
 #define POLYSPEC_SHADING_HALF_SRC 1
 #define POLYSPEC_SHADING_HALF_DST 0
@@ -536,6 +536,10 @@ void ReadTexel(uint u, uint v, uint charAddress, uint charSizeH, uint colorMode,
     }
 }
 
+bool IsMeshCulled(int2 coord) {
+    return BitTest(coord.x ^ coord.y, 0);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
@@ -548,6 +552,10 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     const PolySpan span = spanParams[spanIndex];
     const uint spanStep = id.x - spanPrefixSums[spanIndex] + span.skip;
+    const bool meshEnable = BitTest(span.cmdpmod, 8);
+    const bool cullMeshPixels = !POLYSPEC_TRANSPARENT_MESH && meshEnable;
+    // TODO: POLYSPEC_TRANSPARENT_MESH should output to the mesh buffer
+    // TODO: handle dblInterlaceEnable, dblInterlaceDrawLine, deinterlace
 
     LineStepper lineStepper;
     lineStepper.Setup(span.coord0, span.coord1, span.antialias);
@@ -607,7 +615,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 #endif
 
     // Specializations are split into the following blocks:
-    // - MSB [TODO: test and fix]
+    // - MSB
     // - Non-MSB
     //   - Replace or Half-Luminance (HALF_DST==0)
     //   - Half-Transparency (HALF_DST==1, HALF_SRC==1) [TODO: implement]
@@ -619,84 +627,81 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     // Apply MSB bit
     const int2 coord = lineStepper.Coord();
-    uint outOffset = coord.y * fbSize.x + coord.x;
-    uint dummy;
-    if (pixel8Bits) {
-        outOffset &= ~1u;
-    } else {
-        outOffset <<= 1u;
+    if (!cullMeshPixels || !IsMeshCulled(coord)) {
+        uint outOffset = coord.y * fbSize.x + coord.x;
+        uint dummy;
+        if (pixel8Bits) {
+            outOffset &= ~1u;
+        } else {
+            outOffset <<= 1u;
+        }
+        WriteOr16(fbramOut, outOffset + fbOffset, 0x8000);
     }
-    WriteOr16(fbramOut, outOffset + fbOffset, 0x8000);
 
     if (span.antialias && lineStepper.NeedsAA()) {
         const int2 aaCoord = lineStepper.AACoord();
-        uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
-        if (pixel8Bits) {
-            aaOutOffset &= ~1u;
-        } else {
-            aaOutOffset <<= 1u;
+        if (!cullMeshPixels || !IsMeshCulled(aaCoord)) {
+            uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
+            if (pixel8Bits) {
+                aaOutOffset &= ~1u;
+            } else {
+                aaOutOffset <<= 1u;
+            }
+            WriteOr16(fbramOut, aaOutOffset + fbOffset, 0x8000);
         }
-        WriteOr16(fbramOut, aaOutOffset + fbOffset, 0x8000);
+    }
+
+#elif !POLYSPEC_SHADING_HALF_SRC && POLYSPEC_SHADING_HALF_DST
+    // =========================================================================
+    // Non-MSB: Shadow
+
+    // Output value is the number of shifts to apply to underlying pixels.
+    // Output merger applies the shift to pixels with MSB=1.
+
+    const int2 coord = lineStepper.Coord();
+    if (!cullMeshPixels || !IsMeshCulled(coord)) {
+        const uint outOffset = coord.y * fbSize.x + coord.x;
+        InterlockedAdd(internalSpriteOut[outOffset], 1);
+    }
+    if (span.antialias && lineStepper.NeedsAA()) {
+        const int2 aaCoord = lineStepper.AACoord();
+        if (!cullMeshPixels || !IsMeshCulled(aaCoord)) {
+            const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
+            InterlockedAdd(internalSpriteOut[aaOutOffset], 1);
+        }
     }
 
 #else
     // =========================================================================
-    // Non-MSB
+    // Non-MSB: Replace, Half-Luminance or Half-Transparency
 
-// Whether the shader needs to modify the source color.
-// Avoids wasting time converting uint16 <-> Color555 when the source color is used as is.
-#define POLY_MODIFY_SRC_COLOR (POLYSPEC_SHADING_GOURAUD || POLYSPEC_SHADING_HALF_SRC)
-
-#if POLY_MODIFY_SRC_COLOR
-    uint4 srcColor = Uint16ToColor555(spriteData);
-#endif
+    // Modify source color depending on the mode
+#if POLYSPEC_SHADING_GOURAUD || (!POLYSPEC_SHADING_HALF_DST && POLYSPEC_SHADING_HALF_SRC)
+    if (!pixel8Bits) {
+        uint4 srcColor = Uint16ToColor555(spriteData);
 
 #if POLYSPEC_SHADING_GOURAUD
-    if (!pixel8Bits) {
+        // Apply gouraud shading
         GouraudStepper gouraud;
         gouraud.Setup(lineStepper.Length() + 1, span.gouraud0, span.gouraud1);
         gouraud.Skip(spanStep);
         srcColor = gouraud.Blend(srcColor);
-    }
 #endif
 
-
-#if !POLYSPEC_SHADING_HALF_DST
-    // -------------------------------------------------------------------------
-    // Replace or Half-Luminance
-
-#if POLYSPEC_SHADING_HALF_SRC
-    if (!pixel8Bits) {
+#if !POLYSPEC_SHADING_HALF_DST && POLYSPEC_SHADING_HALF_SRC
         // Apply half-luminance
         srcColor.r >>= 1u;
         srcColor.g >>= 1u;
         srcColor.b >>= 1u;
-    }
 #endif
 
-#if POLY_MODIFY_SRC_COLOR
-    spriteData = Color555ToUint16(srcColor);
-#endif
+        spriteData = Color555ToUint16(srcColor);
+    }
+#endif // POLYSPEC_SHADING_GOURAUD || (!POLYSPEC_SHADING_HALF_DST && POLYSPEC_SHADING_HALF_SRC)
 
     const uint value = spriteData | ((spanIndex + 1u) << 16u);
 
-    // TODO: const bool meshEnable = BitTest(span.cmdpmod, 8);
-    // if (!POLYSPEC_TRANSPARENT_MESH && meshEnable && BitTest(coord.x ^ coord.y, 0)) {
-    //     discard pixel
-    // }
-
-    // TODO: dblInterlaceEnable, dblInterlaceDrawLine, deinterlace
-
-    const int2 coord = lineStepper.Coord();
-    const uint outOffset = coord.y * fbSize.x + coord.x;
-    InterlockedMax(internalSpriteOut[outOffset], value);
-
-    if (span.antialias && lineStepper.NeedsAA()) {
-        const int2 aaCoord = lineStepper.AACoord();
-        const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
-        InterlockedMax(internalSpriteOut[aaOutOffset], value);
-    }
-#elif POLYSPEC_SHADING_HALF_SRC // && POLYSPEC_SHADING_HALF_DST
+#if POLYSPEC_SHADING_HALF_SRC && POLYSPEC_SHADING_HALF_DST
     // -------------------------------------------------------------------------
     // Half-Transparency
 
@@ -705,13 +710,26 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // - Linked List
     // - Loop32
     // - Spinlock
-#else // !POLYSPEC_SHADING_HALF_SRC && POLYSPEC_SHADING_HALF_DST
+#else
     // -------------------------------------------------------------------------
-    // Shadow
+    // Replace or Half-Luminance
 
-    // TODO: increment shadow writes per pixel with InterlockedAdd
-    // - output merger shifts components right by min(N, 5) if the respective MSB is set, then clears counters to zero
-#endif
+    // Output pixels with the highest sequence number.
+
+    const int2 coord = lineStepper.Coord();
+    if (!cullMeshPixels || !IsMeshCulled(coord)) {
+        const uint outOffset = coord.y * fbSize.x + coord.x;
+        InterlockedMax(internalSpriteOut[outOffset], value);
+    }
+
+    if (span.antialias && lineStepper.NeedsAA()) {
+        const int2 aaCoord = lineStepper.AACoord();
+        if (!cullMeshPixels || !IsMeshCulled(aaCoord)) {
+            const uint aaOutOffset = aaCoord.y * fbSize.x + aaCoord.x;
+            InterlockedMax(internalSpriteOut[aaOutOffset], value);
+        }
+    }
+#endif // POLYSPEC_SHADING_HALF_SRC && POLYSPEC_SHADING_HALF_DST
 
 #endif // POLYSPEC_MODE_MSB
 }
