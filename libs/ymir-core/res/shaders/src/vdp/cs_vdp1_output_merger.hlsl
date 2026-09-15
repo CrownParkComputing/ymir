@@ -2,6 +2,20 @@
 #include "vdp1_common_params.hlsli"
 
 #include "util/bit_ops.hlsli"
+#include "util/data_ops.hlsli"
+
+// Shader specialization macros:
+// - POLYSPEC_TRANSPARENT_MESH: 0=checkerboard mesh; 1=transparent mesh
+// - POLYSPEC_MERGE_MODE: 0=copy (Replace, Half-Luminance); 1=right-shift (Shadow); 2=OIT (Half-Transparency)
+//
+// Implementation notes:
+// - Works on 32-bit units at a time
+
+// Modify these to adjust IntelliSense highlighting
+#ifdef __INTELLISENSE__
+#define POLYSPEC_TRANSPARENT_MESH 0
+#define POLYSPEC_MERGE_MODE       1
+#endif
 
 cbuffer CommonRenderParamsBuffer : register(b0) {
     CommonRenderParams g_commonParams;
@@ -29,6 +43,10 @@ static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Mergers
+
+#if POLYSPEC_MERGE_MODE == 0
+// ----------------------------------------------------------------------------
+// Copy (Replace, Half-Luminance)
 
 void Merge8(uint2 pos) {
     const uint inOffset = pos.x * 4 + pos.y * fbSize.x;
@@ -102,12 +120,67 @@ void Merge16(uint2 pos) {
     fbramOut.Store(outOffset + fbOffset, fbramValue);
 }
 
+#elif POLYSPEC_MERGE_MODE == 1
+// ----------------------------------------------------------------------------
+// Right-shift (Shadow)
+
+void Merge8(uint2 pos) {
+    // Shadow does not apply to 8-bit mode.
+}
+
+void Merge16(uint2 pos) {
+    const uint inOffset = pos.x * 2 + pos.y * fbSize.x;
+
+    // Read and clear internal outputs
+    const uint shift0 = min(internalSpriteOut[inOffset + 0], 5);
+    const uint shift1 = min(internalSpriteOut[inOffset + 1], 5);
+    if (shift0 == 0 && shift1 == 0) {
+        // Nothing written to these pixels
+        return;
+    }
+    internalSpriteOut[inOffset + 0] = 0;
+    internalSpriteOut[inOffset + 1] = 0;
+
+    const uint outOffset = inOffset * 2;
+    uint fbramValue = fbramOut.Load(outOffset + fbOffset);
+    if (shift0 != 0) {
+        uint4 color = Uint16ToColor555(BitExtract(fbramValue, 0, 16));
+        if (color.a != 0u) {
+            color.rgb >>= shift0;
+            fbramValue &= ~0xFFFFu;
+            fbramValue |= Color555ToUint16(color);
+        }
+    }
+    if (shift1 != 0) {
+        uint4 color = Uint16ToColor555(BitExtract(fbramValue, 16, 16));
+        if (color.a != 0u) {
+            color.rgb >>= shift1;
+            fbramValue &= ~0xFFFF0000u;
+            fbramValue |= Color555ToUint16(color) << 16u;
+        }
+    }
+    fbramOut.Store(outOffset + fbOffset, fbramValue);
+}
+
+#elif POLYSPEC_MERGE_MODE == 2
+// ----------------------------------------------------------------------------
+// OIT (Half-Transparency)
+
+void Merge8(uint2 pos) {
+    // Half-Transparency does not apply to 8-bit mode.
+}
+
+void Merge16(uint2 pos) {
+    // TODO: implement
+}
+
+#endif
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
-    // Work on 32-bit units at a time
     if (pixel8Bits) {
         Merge8(id.xy);
     } else {

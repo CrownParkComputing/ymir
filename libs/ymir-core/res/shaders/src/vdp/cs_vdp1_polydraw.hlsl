@@ -21,13 +21,8 @@
 //    DST=1 SRC=1  Half-Transparency  if (dst.msb) { dst = (dst + src) >> 1 } else { dst = src }
 // - Inputs:
 //   - Span parameters list
-//     - Start and end coordinates and gouraud colors
-//     - Span length in pixels
-//     - Span skip amount in pixels
-//     - Texture V coordinate
-//     - Horizontal flip bit
-//   - Precomputed span length and prefix sums to aid pixel-level indexing
-// - id.x is a pixel-level index into the span sequence
+//   - Precomputed span length and prefix sums for pixel indexing
+// - id.x is a pixel index into the span sequence
 //   - For example, if the span list contains 3 spans with lengths 10, 12, 14 and skips 0, 0, 10:
 //     - index  0 -> span 0 pixel 0
 //     - index  7 -> span 0 pixel 7
@@ -41,7 +36,7 @@
 // - Spans are drawn parallel using order-independent algorithms depending on the blending mode
 //   - MSB applies the bit directly to FBRAM with InterlockedOr (or set bits in a dedicated buffer; check which is faster)
 //   - Replace and Half-Luminance use InterlockedMax with a sequence number to write the latest version of a pixel to the output
-//   - Shadow increments per-pixel counters with InterlockedAdd
+//   - Shadow increments per-pixel shift counters with InterlockedAdd
 //   - Half-Transparency uses an order-independent transparency algorithm [TBD]
 // - The output merger shader applies the output of this shader to the output FBRAM in 32-bit units (2 or 4 pixels at a time)
 //   - Skipped for MSB (unless using a dedicated buffer)
@@ -192,34 +187,15 @@ struct TextureStepper {
         return value;
     }
 
-    // Determines if the stepper is ready to step to the next texel.
-    bool ShouldStepTexel() {
-        return accum >= 0;
-    }
-
-    // Steps to the next texel.
-    void StepTexel() {
-        value += inc;
-        accum -= den;
-    }
-
-    // Resets the texel counter to the initial value.
-    void ResetTexel() {
-        value = baseValue;
-    }
-
-    void ResetAndStepTexel() {
+    // Moves to the pixel at the specified step.
+    void SetPixel(uint step) {
+        accum = baseAccum + num * step;
         value = baseValue;
         if (accum >= 0) {
             const int count = (accum / den) + 1;
             value += inc * count;
             accum -= den * count;
         }
-    }
-
-    // Moves to the pixel at the specified step.
-    void SetPixel(uint step) {
-        accum = baseAccum + num * step;
     }
 };
 
@@ -281,11 +257,6 @@ struct GouraudChannelStepper {
         baseAccum = accum;
     }
 
-    void Reset() {
-        value = baseValue;
-        accum = baseAccum;
-    }
-
     // Skips the specified number of pixels.
     void Skip(int steps) {
         value += intInc * steps;
@@ -317,12 +288,6 @@ struct GouraudStepper {
         stepperR.Setup(length, gouraudStart.r, gouraudEnd.r);
         stepperG.Setup(length, gouraudStart.g, gouraudEnd.g);
         stepperB.Setup(length, gouraudStart.b, gouraudEnd.b);
-    }
-
-    void Reset() {
-        stepperR.Reset();
-        stepperG.Reset();
-        stepperB.Reset();
     }
 
     // Skips the specified number of pixels.
@@ -421,18 +386,6 @@ struct LineStepper {
         // accumTarget <<= kShift;
     }
 
-    // Computes how many steps are needed from the start of the line to reach the target pixel.
-    // Aligns the major coordinate only.
-    uint StepsToTarget(uint2 targetPos, bool antiAlias) {
-        const int2 deltaPos = (targetPos - start - (antiAlias ? aaInc : 0)) * majInc;
-        const int delta = deltaPos.x + deltaPos.y;
-
-        if (delta < 0 || delta >= int(dmaj) + 1) {
-            return dmaj + 1;
-        }
-        return delta;
-    }
-
     // Sets the slope step to the specified coordinate.
     // Clamped to the length of the line.
     void SetStep(uint targetStep) {
@@ -476,19 +429,6 @@ struct LineStepper {
         return dmaj;
     }
 };
-
-uint4 Uint16ToColor555(uint rawValue) {
-    return uint4(
-        BitExtract(rawValue, 0, 5),
-        BitExtract(rawValue, 5, 5),
-        BitExtract(rawValue, 10, 5),
-        BitExtract(rawValue, 15, 1)
-    );
-}
-
-uint Color555ToUint16(uint4 color) {
-    return color.r | (color.g << 5) | (color.b << 10) | (color.a << 15);
-}
 
 void ReadTexel(uint u, uint v, uint charAddress, uint charSizeH, uint colorMode, uint colorData, out uint color, out bool transparent, out bool hasEndCode) {
     const uint charIndex = u + v * charSizeH;
@@ -536,6 +476,7 @@ void ReadTexel(uint u, uint v, uint charAddress, uint charSizeH, uint colorMode,
     }
 }
 
+// Determines if the pixel at the given coordinate should be culled in the mesh checkerboard pattern.
 bool IsMeshCulled(int2 coord) {
     return BitTest(coord.x ^ coord.y, 0);
 }
@@ -563,8 +504,10 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     uint spriteData;
 #if POLYSPEC_TEXTURED
+    // -------------------------------------------------------------------------
+    // Textured polygon
+
     {
-        // Fetch texel
         TextureStepper uStepper;
         const uint charSizeH = max(BitExtract(span.cmdsize, 8, 6) << 3, 1);
         const bool flipH = span.flipH;
@@ -584,7 +527,6 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
         uStepper.Setup(lineStepper.Length() + 1, uStart, uEnd, useHighSpeedShrink, evenOddCoordSelect);
         uStepper.SetPixel(spanStep);
-        uStepper.ResetAndStepTexel();
 
         uint endCodeIndex;
         bool checkEndCodes;
@@ -608,18 +550,14 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         }
     }
 #else
+    // -------------------------------------------------------------------------
+    // Solid color polygon
+
     spriteData = span.cmdcolr;
     if (pixel8Bits) {
         spriteData &= 0xFFu;
     }
 #endif
-
-    // Specializations are split into the following blocks:
-    // - MSB
-    // - Non-MSB
-    //   - Replace or Half-Luminance (HALF_DST==0)
-    //   - Half-Transparency (HALF_DST==1, HALF_SRC==1) [TODO: implement]
-    //   - Shadow (HALF_DST==1, HALF_SRC==0) [TODO: implement]
 
 #if POLYSPEC_MODE_MSB
     // =========================================================================
@@ -701,6 +639,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     const uint value = spriteData | ((spanIndex + 1u) << 16u);
 
+    // Output pixel depending on the mode
 #if POLYSPEC_SHADING_HALF_SRC && POLYSPEC_SHADING_HALF_DST
     // -------------------------------------------------------------------------
     // Half-Transparency

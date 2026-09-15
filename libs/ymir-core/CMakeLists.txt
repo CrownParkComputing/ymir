@@ -400,20 +400,18 @@ set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 #   <variant> specifies an optional variant name for the shader
 #   <macro> defines macros for that variant
 set(COMPUTE_SHADER_SOURCES
-    res/shaders/src/vdp/cs_vdp1_output_merger.hlsl
-
     res/shaders/src/vdp/cs_vdp2_compose.hlsl
     res/shaders/src/vdp/cs_vdp2_render_bgs.hlsl
     res/shaders/src/vdp/cs_vdp2_render_sprite.hlsl
 )
 
-# Generate VDP1 polygon drawing shader specializations
-# Naming scheme: cs_vdp1_polydraw_<transparent-mesh>_<textured>_<gouraud>_<half-src>_<half-dst>
+# Generate shader specializations
 foreach (_transparent_mesh RANGE 1)
     foreach (_textured RANGE 1)
         foreach (_gouraud RANGE 1)
             foreach (_half_src RANGE 1)
                 foreach (_half_dst RANGE 1)
+                    # Polygon drawing, non-MSB variants
                     set(_variant_name "${_transparent_mesh}_${_textured}_${_gouraud}_${_half_src}_${_half_dst}")
                     set(_macros_transparent_mesh "POLYSPEC_TRANSPARENT_MESH=${_transparent_mesh}")
                     set(_macros_textured "POLYSPEC_TEXTURED=${_textured}")
@@ -427,12 +425,22 @@ foreach (_transparent_mesh RANGE 1)
             endforeach ()
         endforeach ()
 
+        # Polygon drawing, MSB variants
         set(_variant_name "msb_${_transparent_mesh}_${_textured}")
         set(_macros_transparent_mesh "POLYSPEC_TRANSPARENT_MESH=${_transparent_mesh}")
         set(_macros_textured "POLYSPEC_TEXTURED=${_textured}")
         set(_macros_msb "POLYSPEC_MODE_MSB=1")
         set(_macros "${_macros_transparent_mesh}|${_macros_textured}|${_macros_msb}")
         list(APPEND COMPUTE_SHADER_SOURCES "res/shaders/src/vdp/cs_vdp1_polydraw.hlsl|${_variant_name}|${_macros}")
+    endforeach ()
+
+    # Output merger
+    foreach (_merge_mode RANGE 2)
+        set(_variant_name "${_transparent_mesh}_${_merge_mode}")
+        set(_macros_transparent_mesh "POLYSPEC_TRANSPARENT_MESH=${_transparent_mesh}")
+        set(_macros_merge_mode "POLYSPEC_MERGE_MODE=${_merge_mode}")
+        set(_macros "${_macros_transparent_mesh}|${_macros_merge_mode}")
+        list(APPEND COMPUTE_SHADER_SOURCES "res/shaders/src/vdp/cs_vdp1_output_merger.hlsl|${_variant_name}|${_macros}")
     endforeach ()
 endforeach ()
 

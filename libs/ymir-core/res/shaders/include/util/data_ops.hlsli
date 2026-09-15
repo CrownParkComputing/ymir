@@ -33,4 +33,17 @@ void WriteOr16(RWByteAddressBuffer buf, uint address, uint value) {
     buf.InterlockedOr(address & ~3, value, dummy);
 }
 
+uint4 Uint16ToColor555(uint rawValue) {
+    return uint4(
+        BitExtract(rawValue, 0, 5),
+        BitExtract(rawValue, 5, 5),
+        BitExtract(rawValue, 10, 5),
+        BitExtract(rawValue, 15, 1)
+    );
+}
+
+uint Color555ToUint16(uint4 color) {
+    return color.r | (color.g << 5) | (color.b << 10) | (color.a << 15);
+}
+
 #endif
