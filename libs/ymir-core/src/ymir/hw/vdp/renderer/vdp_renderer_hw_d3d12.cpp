@@ -5180,6 +5180,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP2RenderLine(uint32 y) {
+        VDP2CalcAccessPatterns();
         VDP2CalcVCellScrollDelay();
         VDP2DrawLineColorBackScreens(y);
         VDP2UpdateRotationParameterBases(y);
