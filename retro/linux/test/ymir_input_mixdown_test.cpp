@@ -103,12 +103,24 @@ int main() {
         check(!b.peek(), "idle button peeks released");
     }
 
-    /* ---- nothing is lost when both threads are busy at once ----
+    /* ---- the two threads do not corrupt each other ----
      *
      * The producer is the UI thread and the consumer is the emulation thread
-     * reading the SMPC. A lost delta here is a pointer that walks away from
-     * where the user is aiming, which on a device looks like drift with no
-     * cause. Assert the arithmetic instead: everything added comes out. */
+     * reading the SMPC. What is being tested is that concurrent add/consume
+     * cannot tear a value or invent movement.
+     *
+     * It is NOT that every unit added comes out. MouseAccum::addAxis clamps
+     * the pending total to [kMin, kMax] on purpose -- an app left with a stuck
+     * pointer would otherwise accumulate unboundedly and deliver the overflow
+     * as motion minutes later. So a producer that outruns the consumer loses
+     * movement BY DESIGN, and how much depends entirely on how the two threads
+     * happen to interleave.
+     *
+     * This check used to assert drained == kSteps, which is that lossless
+     * property, and it failed roughly two runs in five. It was invisible
+     * because CI ran a hand-listed four tests and this was not one of them.
+     * Exact losslessness under the cap is already covered deterministically by
+     * the "fast swipe delivered in full across reads" case above. */
     {
         MouseAccum m;
         constexpr int kSteps = 20000;
@@ -117,11 +129,12 @@ int main() {
 
         std::thread consumer([&] {
             int16_t x = 0, y = 0;
-            while (!done.load(std::memory_order_relaxed)) {
+            /* acquire pairs with the producer's release below, so that when
+             * done reads true every preceding add is visible here. */
+            while (!done.load(std::memory_order_acquire)) {
                 m.consume(x, y);
                 drained += x;
             }
-            /* final drain, until it stops producing anything */
             do {
                 m.consume(x, y);
                 drained += x;
@@ -129,11 +142,14 @@ int main() {
         });
 
         for (int i = 0; i < kSteps; ++i) m.add(1, 0);
-        done.store(true, std::memory_order_relaxed);
+        done.store(true, std::memory_order_release);
         consumer.join();
 
-        check(drained.load() == kSteps,
-              "concurrent add/consume loses no movement");
+        const long got = drained.load();
+        check(got > 0, "concurrent consumer sees movement");
+        check(got <= kSteps, "concurrent consume never invents movement");
+        check(!m.pending(),
+              "the final drain leaves nothing pending");
     }
 
     if (failures) {
