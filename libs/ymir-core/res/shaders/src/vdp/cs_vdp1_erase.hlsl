@@ -57,7 +57,6 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         partialWrite = pos.y == vblankEraseMaxY && pos.x + 1 > vblankEraseMaxX;
     }
 
-
     const uint address = drawFBOffset + ((pos.y << addressShift) + pos.x) * 2;
     const uint writeValue = BitExtract(g_eraseParams.erase, 0, 16);
     uint value;

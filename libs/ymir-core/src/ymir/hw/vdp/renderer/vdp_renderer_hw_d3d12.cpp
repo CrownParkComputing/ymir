@@ -1005,9 +1005,6 @@ struct Direct3D12VDPRenderer::Impl {
         size_t currOutputMergerShaderIndex = -1;
         // Whether the currently active polygon drawing shader is an MSB or non-MSB variant
         bool currPolyDrawShaderMSB = false;
-
-        // Whether to execute the erase process on next swap
-        bool doErase = false;
     } vdp1;
 
     /// @brief Constructs a polygon drawing shader index from its variant options.
@@ -3337,8 +3334,6 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP1EraseFramebuffer(uint64 cycles) {
-        vdp1.doErase = true;
-
         // Vertical scale is doubled in double-interlace mode
         const VDP1Regs &regs1 = vdpState.regs1;
         const VDP2Regs &regs2 = vdpState.regs2;
@@ -3370,43 +3365,40 @@ struct Direct3D12VDPRenderer::Impl {
                 vdp1.cpuEraseParams.vblank.maxX = 0;
             }
         }
+
+        // Do framebuffer erase
+        const auto &erase = vdp1.cpuEraseParams;
+        const uint32 width = (erase.coords.x3 << 3) - (erase.coords.x1 << 3) + 1;
+        const uint32 height = erase.coords.y3 - erase.coords.y1 + 1;
+
+        FrameContext &frameCtx = frames.GetCurrentFrame();
+
+        VDP1UpdateCommonRenderParams();
+        vdp1.cpuCommonRenderParams.displayParams.drawFB = vdpState.displayFB;
+
+        // Transition FBRAM to UAV usage
+        barrierTracker.TransitionBuffer(vdp1.fbramBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+        barrierTracker.Flush(cmdList);
+
+        // Dispatch erase shader
+        cmdList->SetPipelineState(frameCtx.erasePSO.GetPointer());
+        cmdList->SetComputeRootSignature(vdp1.eraseRootSig.GetPointer());
+        cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
+                                              &vdp1.cpuCommonRenderParams, 0);
+        cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuEraseParams) / sizeof(uint32), &vdp1.cpuEraseParams,
+                                              sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
+        cmdList->SetComputeRootDescriptorTable(1, frameCtx.eraseDescs.gpuHandle);
+        cmdList->Dispatch((width + 63) / 64, (height + 31) / 32, 1);
+        // NOTE: works on 32-bit units, so two writes per thread, hence why (width+63)/64 instead of +31/32
+
+        // Insert UAV barrier to ensure the following shaders see these changes
+        barrierTracker.UAVBuffer(vdp1.fbramBuffer.GetPointer());
     }
 
     void VDP1SwapFramebuffer() {
         // Submit any pending spans
         VDP1SubmitSpans();
-
-        // Do framebuffer erase
-        if (vdp1.doErase) {
-            vdp1.doErase = false;
-            const auto &erase = vdp1.cpuEraseParams;
-            const uint32 width = (erase.coords.x3 << 3) - (erase.coords.x1 << 3) + 1;
-            const uint32 height = erase.coords.y3 - erase.coords.y1 + 1;
-
-            FrameContext &frameCtx = frames.GetCurrentFrame();
-
-            VDP1UpdateCommonRenderParams();
-            vdp1.cpuCommonRenderParams.displayParams.drawFB = vdpState.displayFB;
-
-            // Transition FBRAM to UAV usage
-            barrierTracker.TransitionBuffer(vdp1.fbramBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
-            barrierTracker.Flush(cmdList);
-
-            // Dispatch erase shader
-            cmdList->SetPipelineState(frameCtx.erasePSO.GetPointer());
-            cmdList->SetComputeRootSignature(vdp1.eraseRootSig.GetPointer());
-            cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
-                                                  &vdp1.cpuCommonRenderParams, 0);
-            cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuEraseParams) / sizeof(uint32), &vdp1.cpuEraseParams,
-                                                  sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
-            cmdList->SetComputeRootDescriptorTable(1, frameCtx.eraseDescs.gpuHandle);
-            cmdList->Dispatch((width + 63) / 64, (height + 31) / 32, 1);
-            // NOTE: works on 32-bit units, so two writes per thread, hence why (width+63)/64 instead of +31/32
-
-            // Insert UAV barrier to ensure the following shaders see these changes
-            barrierTracker.UAVBuffer(vdp1.fbramBuffer.GetPointer());
-        }
     }
 
     void VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Control control) {
@@ -5326,6 +5318,7 @@ void Direct3D12VDPRenderer::PreSaveStateSync() {}
 
 void Direct3D12VDPRenderer::PostLoadStateSync() {
     m_impl->vdp1.vramDirty.SetAll();
+    // TODO: make FBRAM dirty
 
     m_impl->vdp1.cpuPolyDrawParams.userClip0.x = m_impl->vdpState.state1.userClipX0;
     m_impl->vdp1.cpuPolyDrawParams.userClip0.y = m_impl->vdpState.state1.userClipY0;
