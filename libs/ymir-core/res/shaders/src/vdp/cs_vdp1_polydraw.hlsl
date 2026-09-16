@@ -538,15 +538,18 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         }
 
         const uint texU = uStepper.Value();
-        if (!checkEndCodes || (flipH ? (texU > endCodeIndex) : (texU < endCodeIndex))) {
-            bool transparent;
-            bool hasEndCode;
-            ReadTexel(texU, span.texV, span.charAddr, charSizeH, colorMode, span.cmdcolr, spriteData, transparent, hasEndCode);
+        if (checkEndCodes && (flipH ? (texU <= endCodeIndex) : (texU >= endCodeIndex))) {
+            // Past end code range
+            return;
+        }
 
-            if ((hasEndCode && endCodesEnabled) || (transparent && !transparentPixelDisable)) {
-                // Transparent pixel
-                return;
-            }
+        bool transparent;
+        bool hasEndCode;
+        ReadTexel(texU, span.texV, span.charAddr, charSizeH, colorMode, span.cmdcolr, spriteData, transparent, hasEndCode);
+
+        if ((hasEndCode && endCodesEnabled) || (transparent && !transparentPixelDisable)) {
+            // Transparent pixel
+            return;
         }
     }
 #else
