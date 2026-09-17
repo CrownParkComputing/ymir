@@ -90,7 +90,7 @@ constexpr int32_t kAudioSampleRate = 44100;
 constexpr int32_t kAudioBufferMs   = 150;
 /* What the emulator aims to keep queued. The worker paces itself to hold this
  * much and no more -- see worker_loop, where it is the whole sync mechanism. */
-constexpr int32_t kAudioTargetMs   = 60;
+constexpr int32_t kAudioTargetMs   = 40;
 
 /* ---- framebuffer double-buffer ---- */
 struct FrameSlot {

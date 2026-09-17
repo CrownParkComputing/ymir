@@ -30,6 +30,7 @@ struct AlsaState {
     void              *bridge     = nullptr;   /* YmirInstance* */
     int32_t            sampleRate = 44100;
     int32_t            channels   = 2;
+    int32_t            periodFrames = 512;
 };
 
 /* Pull frames from the bridge's audio ring. Implemented in ymir_bridge.cpp
@@ -37,7 +38,7 @@ struct AlsaState {
 extern int32_t ymir_bridge_pull_audio(void *inst_v, int16_t *out, int32_t max_frames);
 
 static void alsa_writer_loop(AlsaState *st) {
-    constexpr int32_t kFramesPerChunk = 1024;
+    const int32_t kFramesPerChunk = st->periodFrames;
     std::vector<int16_t> chunk(kFramesPerChunk * st->channels);
 
     while (!st->stop.load(std::memory_order_acquire)) {
@@ -47,10 +48,27 @@ static void alsa_writer_loop(AlsaState *st) {
         }
 
         if (n <= 0) {
-            /* No data ready — write one period of silence then loop.
-             * ALSA's start_threshold will keep the device quiet. */
-            std::memset(chunk.data(), 0, kFramesPerChunk * st->channels * sizeof(int16_t));
-            n = kFramesPerChunk;
+            /*
+             * Nothing ready yet. Wait for the emulator, do NOT pad the device
+             * with silence.
+             *
+             * Padding was catastrophic here. snd_pcm_writei only blocks when
+             * the device buffer is full, and this buffer is now sized in tens
+             * of milliseconds -- but it used to be whatever ALSA felt like
+             * handing out, which on the PipeWire plugin was 1,048,576 frames,
+             * or twenty-four seconds. So the writer never blocked, spun as
+             * fast as it could, and packed the device with silence. Every real
+             * sample then queued up behind all of it. That is the delay that
+             * was left after the ring was fixed: our ring said 60ms while the
+             * device below it held seconds.
+             *
+             * Waiting instead lets the device pace this thread, which is what
+             * a correctly sized buffer is for. If the producer really does
+             * stall, the device underruns and snd_pcm_recover patches it --
+             * a brief gap, rather than latency that never comes back.
+             */
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
         }
 
         snd_pcm_sframes_t wrote = snd_pcm_writei(st->pcm, chunk.data(), n);
@@ -107,8 +125,20 @@ static int32_t alsa_start(void *user) {
     unsigned int rate = (unsigned int)st->sampleRate;
     snd_pcm_hw_params_set_rate_near(st->pcm, params, &rate, 0);
 
-    snd_pcm_uframes_t periodSize = 1024;
+    /*
+     * Size the buffer, do not accept whatever is offered.
+     *
+     * Only the period was ever requested here, and ALSA is free to pick the
+     * buffer; the PipeWire ALSA plugin picks its maximum, which measured at
+     * 1,048,576 frames -- 23.8 seconds of audio sitting between us and the
+     * speakers. That is the delay, and no amount of care upstream of it
+     * helps. Four short periods is 46ms, which is enough to survive ordinary
+     * scheduling and small enough to hear as "at the same time".
+     */
+    snd_pcm_uframes_t periodSize = 512;
     snd_pcm_hw_params_set_period_size_near(st->pcm, params, &periodSize, 0);
+    snd_pcm_uframes_t bufferSize = periodSize * 4;
+    snd_pcm_hw_params_set_buffer_size_near(st->pcm, params, &bufferSize);
 
     err = snd_pcm_hw_params(st->pcm, params);
     if (err < 0) {
@@ -121,6 +151,21 @@ static int32_t alsa_start(void *user) {
     snd_pcm_sw_params_t *sw;
     snd_pcm_sw_params_alloca(&sw);
     snd_pcm_sw_params_current(st->pcm, sw);
+    /* What the device actually gave us, which is not always what was asked
+     * for, and is the number that matters. */
+    snd_pcm_hw_params_get_period_size(params, &periodSize, 0);
+    snd_pcm_hw_params_get_buffer_size(params, &bufferSize);
+    st->periodFrames = (int32_t)periodSize;
+    /* Said once. Pausing closes the device and resuming opens it again, and a
+     * line of this on every menu visit is noise. */
+    static bool announced = false;
+    if (!announced) {
+        announced = true;
+        std::fprintf(stderr, "ALSA: %u Hz, period %lu, buffer %lu frames (%.0f ms)\n",
+                     rate, (unsigned long)periodSize, (unsigned long)bufferSize,
+                     bufferSize * 1000.0 / (rate ? rate : 44100));
+    }
+
     snd_pcm_sw_params_set_start_threshold(st->pcm, sw, periodSize);
     snd_pcm_sw_params_set_avail_min(st->pcm, sw, periodSize);
 
@@ -139,6 +184,10 @@ static int32_t alsa_start(void *user) {
 
 static void alsa_stop(void *user) {
     auto *st = (AlsaState *)user;
+    /* Nothing is playing, so the meter must not go on showing the last thing
+     * that did: the writer thread is about to stop and it is the only thing
+     * that decays this. */
+    st->peak.store(0, std::memory_order_relaxed);
     st->stop.store(true, std::memory_order_release);
     if (st->writer.joinable()) st->writer.join();
     if (st->pcm) {
