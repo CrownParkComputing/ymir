@@ -67,13 +67,24 @@ static void alsa_writer_loop(AlsaState *st) {
             snd_pcm_writei(st->pcm, chunk.data() + wrote * st->channels, n - (int)wrote);
         }
 
-        /* Peak detector — track the max sample magnitude for the UI meter */
+        /*
+         * Peak detector for the UI meter -- rise and fall both handled here.
+         *
+         * The fall used to happen in get_level, once per read, which made the
+         * meter depend on how often somebody looked at it: this writer runs at
+         * a fixed ~43 chunks a second and a vsynced UI reads at whatever the
+         * display does, so at a high refresh rate the value decayed to nothing
+         * between chunks and the meter read silence over loud music. Decaying
+         * where the cadence is known fixes that for every caller.
+         */
         int32_t p = st->peak.load(std::memory_order_relaxed);
+        p -= p / 4;                     /* ~23 ms per chunk: a natural fall */
         for (int32_t i = 0; i < n * st->channels; ++i) {
             int32_t v = chunk[i] < 0 ? -chunk[i] : chunk[i];
             if (v > p) p = v;
         }
         st->peak.store(p > 32767 ? 32767 : p, std::memory_order_relaxed);
+
     }
 }
 
@@ -149,14 +160,20 @@ static void alsa_set_muted(void *user, int32_t muted) {
 }
 
 static int32_t alsa_get_level(void *user) {
-    int32_t peak = ((AlsaState *)user)->peak.load(std::memory_order_relaxed);
-    /* Decay toward 0 each call so the UI meter falls when audio drops. */
-    int32_t cur = peak * 100 / 32767;
-    int32_t prev = ((AlsaState *)user)->peak.load();
-    if (cur < prev / 2) {
-        ((AlsaState *)user)->peak.store(0, std::memory_order_relaxed);
-    }
-    return cur;
+    auto *st = (AlsaState *)user;
+    /*
+     * One value, one unit.
+     *
+     * This compared `cur`, a 0..100 percentage, against `prev`, the raw
+     * 0..32767 magnitude it was derived from. That test is true for anything
+     * louder than a whisper, so the peak was reset to zero on very nearly
+     * every read and the meter showed silence while the speakers were
+     * playing -- which makes it worse than no meter, because it answers "is
+     * there any sound?" with a confident no.
+     */
+    /* A pure read. The writer thread does the decay -- see alsa_writer_loop --
+     * because it is the one with a fixed cadence. */
+    return st->peak.load(std::memory_order_relaxed) * 100 / 32767;
 }
 
 static void alsa_destroy(void *user) {

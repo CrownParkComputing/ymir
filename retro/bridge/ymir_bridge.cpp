@@ -77,8 +77,20 @@ namespace fs = std::filesystem;
 
 /* ---- audio ring buffer constants ---- */
 constexpr int32_t kAudioSampleRate = 44100;
-constexpr int32_t kAudioBufferMs   = 500;
-constexpr int32_t kAudioPrebufferMs = 80;
+/*
+ * How much sound may be waiting to be played.
+ *
+ * This was half a second, and half a second is what the listener hears: the
+ * ring filled to the brim within a few seconds of boot and stayed there, so
+ * the sound coming out of the speakers was always the sound of half a second
+ * ago -- the Sega logo jingle still playing over a game that had already
+ * started. A buffer is there to absorb scheduling jitter, and 150ms absorbs
+ * far more of that than any desktop produces.
+ */
+constexpr int32_t kAudioBufferMs   = 150;
+/* What the emulator aims to keep queued. The worker paces itself to hold this
+ * much and no more -- see worker_loop, where it is the whole sync mechanism. */
+constexpr int32_t kAudioTargetMs   = 60;
 
 /* ---- framebuffer double-buffer ---- */
 struct FrameSlot {
@@ -664,7 +676,33 @@ static void raise_emulation_thread_priority(void) {
 static void worker_loop(YmirInstance *inst) {
     raise_emulation_thread_priority();
     using clock = std::chrono::steady_clock;
-    auto nextFrame = clock::now() + std::chrono::milliseconds(16);
+    using dsec  = std::chrono::duration<double>;
+
+    /*
+     * Pacing, which is the whole of audio/video sync.
+     *
+     * Two things were wrong here and they compounded. The loop slept to a flat
+     * 16ms, which is 62.5 frames a second; an NTSC Saturn runs at 59.94. That
+     * is 4.5% fast, and because the SCSP makes its samples out of emulated
+     * time, it was producing 46,000 samples for every 44,100 the sound card
+     * would take. The surplus had nowhere to go but the ring, which filled and
+     * stayed full -- and a full ring IS the delay you hear.
+     *
+     * So: the frame period comes from the standard actually being emulated,
+     * and then it is trimmed by how much sound is queued. That second part
+     * matters as much as the first, because the host clock and the sound
+     * card's clock are different crystals and any fixed period drifts apart
+     * from the device eventually. Steering by the queue depth makes the sound
+     * card the master clock, which is the only arrangement that does not drift
+     * -- the machine ends up running at exactly the rate its audio is being
+     * consumed.
+     *
+     * The trim is capped at 2%, which is under a third of a semitone and
+     * inaudible, and is far more than any real crystal error needs.
+     */
+    const int64_t audioTarget = (int64_t)kAudioSampleRate * kAudioTargetMs / 1000;
+
+    auto nextFrame = clock::now();
     int32_t frameCount = 0;
     auto lastFpsTime = clock::now();
 
@@ -689,7 +727,7 @@ static void worker_loop(YmirInstance *inst) {
          * and run an hour of emulation as fast as it can. */
         if (inst->presentationPaused.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
-            nextFrame = clock::now() + std::chrono::milliseconds(16);
+            nextFrame = clock::now();
             lastFpsTime = clock::now();
             frameCount = 0;
             inst->fps.store(0, std::memory_order_relaxed);
@@ -712,10 +750,25 @@ static void worker_loop(YmirInstance *inst) {
             lastFpsTime = now;
         }
 
-        /* frame pacing — sleep until target time, then advance */
+        /* ---- frame pacing ---- */
+        const bool pal = *inst->saturn->configuration.system.videoStandard ==
+                         ymir::core::config::sys::VideoStandard::PAL;
+        double period = pal ? 1.0 / 50.0 : 1.0 / 59.94;
+
+        const int64_t queued =
+            inst->ring.writeFrame.load(std::memory_order_relaxed) -
+            inst->ring.readFrame.load(std::memory_order_relaxed);
+        /* Ahead of the sound card: lengthen the frame. Behind it: shorten. */
+        const double error = (double)(queued - audioTarget) /
+                             (double)(audioTarget * 4);
+        period *= 1.0 + std::clamp(error, -0.02, 0.02);
+
         if (now < nextFrame) std::this_thread::sleep_until(nextFrame);
-        nextFrame += std::chrono::milliseconds(16);
-        if (nextFrame < clock::now()) nextFrame = clock::now(); /* catch up */
+        nextFrame += std::chrono::duration_cast<clock::duration>(dsec(period));
+        /* Never try to make up a backlog: a machine that was descheduled for a
+         * second should carry on from now, not run a second of emulation as
+         * fast as it can and shriek. */
+        if (nextFrame < clock::now()) nextFrame = clock::now();
     }
     drain_mailbox(inst);
     inst->workerRunning.store(false, std::memory_order_release);
@@ -810,7 +863,19 @@ YmirInstance *ymir_bridge_create(void) {
                 int64_t r = inst->ring.readFrame.load(std::memory_order_relaxed);
                 int64_t w = inst->ring.writeFrame.load(std::memory_order_relaxed);
                 int64_t queued = w - r;
-                if (queued >= cap) return;
+                if (queued >= cap) {
+                    /*
+                     * Full. Throw away the OLDEST sample, not this one.
+                     *
+                     * Refusing the newest sample was the wrong way round: it
+                     * pinned the delay at the entire depth of the buffer and
+                     * gave it no way to recover, because the thing being
+                     * dropped was always the sample that matched the picture
+                     * on screen. Dropping from the front costs a click and
+                     * puts the sound back level with the picture.
+                     */
+                    inst->ring.readFrame.store(r + 1, std::memory_order_relaxed);
+                }
                 int64_t idx = w % cap;
                 std::lock_guard<std::mutex> lk(inst->ring.mut);
                 inst->ring.buf[idx * 2 + 0] = left;
@@ -991,13 +1056,28 @@ int32_t ymir_bridge_get_audio_muted(YmirInstance *inst) {
 
 int32_t ymir_bridge_get_audio_level(YmirInstance *inst) {
     if (!inst) return 0;
-    int32_t v = inst->ring.peakLevel.load(std::memory_order_relaxed);
-    /* decay */
-    int32_t cur = inst->audio && inst->audio->get_level
-                      ? inst->audio->get_level(inst->audio->user) : v;
-    /* simple lerp toward v for stability */
-    int32_t lvl = (cur * 7 + v * 1) / 8;
-    return std::clamp(lvl, 0, 100);
+    const int32_t ring = inst->ring.peakLevel.load(std::memory_order_relaxed);
+    const int32_t back = inst->audio && inst->audio->get_level
+                             ? inst->audio->get_level(inst->audio->user) : 0;
+    /*
+     * Whichever end of the pipe can actually see the sound.
+     *
+     * On every real platform the backend drains the ring as fast as the SCSP
+     * fills it, so the ring's own peak barely moves and the backend's reading
+     * is the true one; with the stub backend it is the other way round. The
+     * old 7:1 blend of the two averaged the real reading against a near-zero
+     * and reported silence during loud passages.
+     */
+    return std::clamp(std::max(ring, back), 0, 100);
+}
+
+int32_t ymir_bridge_get_audio_queue_ms(YmirInstance *inst) {
+    if (!inst) return 0;
+    const int64_t queued =
+        inst->ring.writeFrame.load(std::memory_order_relaxed) -
+        inst->ring.readFrame.load(std::memory_order_relaxed);
+    if (queued <= 0) return 0;
+    return (int32_t)(queued * 1000 / kAudioSampleRate);
 }
 
 int32_t ymir_bridge_get_fps(YmirInstance *inst) {

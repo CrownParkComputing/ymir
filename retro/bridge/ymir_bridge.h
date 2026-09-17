@@ -212,6 +212,16 @@ void  ymir_bridge_set_audio_muted(YmirInstance *inst, int32_t muted);
 int32_t ymir_bridge_get_audio_muted(YmirInstance *inst);
 int32_t ymir_bridge_get_audio_level(YmirInstance *inst);   /* 0..100 smoothed peak */
 
+/* How much sound is waiting to be played, in milliseconds.
+ *
+ * This is the lag between the picture and the sound, and it is the number to
+ * look at when somebody says the two are out of step. The worker thread steers
+ * its frame pacing to hold it near 60ms; a figure that climbs and sticks at
+ * the buffer depth means the machine is running faster than the sound card can
+ * take, which is what "the Sega logo is still playing and I am already in the
+ * game" looks like from in here. */
+int32_t ymir_bridge_get_audio_queue_ms(YmirInstance *inst);
+
 /* ============================================================ */
 /*  status                                                      */
 /* ============================================================ */
