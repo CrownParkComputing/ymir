@@ -83,6 +83,7 @@ typedef enum {
  * Values:
  *   booleans          0 or 1
  *   VIDEO_STANDARD    0 = NTSC, 1 = PAL
+ *   RTC_MODE          0 = host clock, 1 = virtual
  *   AUDIO_INTERP      0 = nearest neighbour, 1 = linear (what the SCSP does)
  *   SH2_OVERCLOCK     percent, 100 = the real thing
  *   CD_READ_SPEED     2..200, 2 = the real drive
@@ -101,7 +102,12 @@ typedef enum {
     YMIR_OPT_AUDIO_INTERPOLATION  = 7,
     YMIR_OPT_CD_READ_SPEED        = 8,
     YMIR_OPT_CDBLOCK_LLE          = 9,
-    YMIR_OPT_COUNT                = 10,
+    /* 0 = follow the host clock, 1 = emulate the RTC from the bus clock.
+     * Host is what almost everyone wants: the Saturn's clock is simply right,
+     * and stays right. Virtual is for determinism -- a run that must produce
+     * the same result twice cannot have a clock that moves on its own. */
+    YMIR_OPT_RTC_MODE             = 10,
+    YMIR_OPT_COUNT                = 11,
 } YmirCoreOption;
 
 /* Apply an option. Returns YMIR_OK, or YMIR_ERR_INVALID_ARG for an unknown
@@ -210,7 +216,14 @@ const char *ymir_bridge_get_status(YmirInstance *inst);    /* owned; valid until
 /*  framebuffer                                                 */
 /* ============================================================ */
 
-/* Returns the most recently completed XRGB8888 framebuffer and its size.
+/* Returns the most recently completed framebuffer and its size.
+ *
+ * The pixels are 0x00BBGGRR -- red in the LOW byte. This was documented as
+ * XRGB8888 for a long time and it is not: ymir-core's Color888 is a union
+ * whose bitfields run r:8, g:8, b:8, and bitfields fill from the least
+ * significant end, so on a little-endian machine red lands first. A frontend
+ * that believes the old comment renders blue as orange. In SDL's names that
+ * is SDL_PIXELFORMAT_XBGR8888.
  * On width/height change, returns the new dimensions and the buffer is
  * sized for them. Valid until the next frame completes. */
 const uint32_t *ymir_bridge_get_framebuffer(YmirInstance *inst,

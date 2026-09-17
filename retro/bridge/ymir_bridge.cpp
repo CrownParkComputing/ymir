@@ -479,6 +479,10 @@ static int32_t apply_core_option(YmirInstance *inst, YmirCoreOption option,
         if (value < 2 || value > 200) return YMIR_ERR_INVALID_ARG;
         cfg.cdblock.readSpeedFactor = (uint8_t)value;
         return YMIR_OK;
+    case YMIR_OPT_RTC_MODE:
+        cfg.rtc.mode = flag ? ymir::core::config::rtc::Mode::Virtual
+                            : ymir::core::config::rtc::Mode::Host;
+        break;
     case YMIR_OPT_CDBLOCK_LLE:
         /* Changing this hard-resets the machine inside ymir-core, and it needs
          * the CD block ROM. The app warns before offering it. */
@@ -1121,6 +1125,8 @@ int32_t ymir_bridge_get_core_option(YmirInstance *inst, YmirCoreOption option) {
                    : 0;
     case YMIR_OPT_CD_READ_SPEED:        return (int32_t)*cfg.cdblock.readSpeedFactor;
     case YMIR_OPT_CDBLOCK_LLE:          return *cfg.cdblock.useLLE ? 1 : 0;
+    case YMIR_OPT_RTC_MODE:
+        return *cfg.rtc.mode == ymir::core::config::rtc::Mode::Virtual ? 1 : 0;
     default:                            return -1;
     }
 }
