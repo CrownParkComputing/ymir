@@ -83,7 +83,6 @@ typedef enum {
  * Values:
  *   booleans          0 or 1
  *   VIDEO_STANDARD    0 = NTSC, 1 = PAL
- *   RTC_MODE          0 = host clock, 1 = virtual
  *   AUDIO_INTERP      0 = nearest neighbour, 1 = linear (what the SCSP does)
  *   SH2_OVERCLOCK     percent, 100 = the real thing
  *   CD_READ_SPEED     2..200, 2 = the real drive
@@ -102,12 +101,20 @@ typedef enum {
     YMIR_OPT_AUDIO_INTERPOLATION  = 7,
     YMIR_OPT_CD_READ_SPEED        = 8,
     YMIR_OPT_CDBLOCK_LLE          = 9,
-    /* 0 = follow the host clock, 1 = emulate the RTC from the bus clock.
-     * Host is what almost everyone wants: the Saturn's clock is simply right,
-     * and stays right. Virtual is for determinism -- a run that must produce
-     * the same result twice cannot have a clock that moves on its own. */
-    YMIR_OPT_RTC_MODE             = 10,
-    YMIR_OPT_COUNT                = 11,
+    /*
+     * NO RTC MODE OPTION, and it is not an oversight.
+     *
+     * Assigning cfg.rtc.mode segfaults inside util::Observable::Notify():
+     * ymir::smpc::RTC registers a pointer to its own member with
+     * config.mode.Observe(m_mode), and by the time an option is applied that
+     * pointer is dangling -- Notify() walks the list and writes through it.
+     * The other options have no value-observers and are unaffected.
+     *
+     * Exposing it crashed the app on startup. It can come back when the
+     * lifetime is sorted out upstream; until then the clock follows the host,
+     * which is what almost everyone wants anyway.
+     */
+    YMIR_OPT_COUNT                = 10,
 } YmirCoreOption;
 
 /* Apply an option. Returns YMIR_OK, or YMIR_ERR_INVALID_ARG for an unknown
