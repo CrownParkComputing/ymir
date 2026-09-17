@@ -320,6 +320,23 @@ int32_t ymir_bridge_load_state(YmirInstance *inst, const char *path);
  * wizard shows the device's current date+time. */
 void ymir_bridge_set_rtc_to_host(YmirInstance *inst, int64_t offsetSeconds);
 
+/*
+ * Set the clock from the host AND mark the console as already set up.
+ *
+ * The BIOS shows its "Set Language / Set Time" screen whenever the SMPC's STE
+ * bit is clear. That bit means "somebody has been through this", and the BIOS
+ * sets it when they finish -- so a fresh emulated machine asks the same
+ * question on every boot, about a clock the host already knows the answer to.
+ *
+ * This takes the current persistent block, puts the host's time in it, sets
+ * STE and hands it back, all through the public SMPC API. The screen is still
+ * reachable from the BIOS menu by anyone who wants it.
+ *
+ * [offsetSeconds] shifts the time for a machine that should believe it is in
+ * another region; 0 is the host's own clock.
+ */
+int32_t ymir_bridge_init_smpc_from_host(YmirInstance *inst, int64_t offsetSeconds);
+
 /* Set the SMPC persistent-data file path. ymir-core reads this file
  * automatically when SMPC boots; if the file exists and contains a
  * valid 25-byte SMPC state, the BIOS skips the Set Clock / Set

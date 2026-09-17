@@ -1180,6 +1180,22 @@ int32_t ymir_bridge_swap_state(YmirInstance *inst, const char *path) {
     return enqueue_request(inst, std::move(req));
 }
 
+int32_t ymir_bridge_init_smpc_from_host(YmirInstance *inst, int64_t offsetSeconds) {
+    if (!inst || !inst->saturn) return YMIR_ERR_INVALID_HANDLE;
+
+    /* The clock first, so the block taken below carries it. */
+    auto dt = util::datetime::host(offsetSeconds);
+    inst->saturn->SMPC.GetRTC().SetDateTime(dt);
+
+    /* Then the block, with STE set. Taken and handed straight back rather
+     * than built from nothing, so every other field keeps what it had. */
+    ymir::smpc::PersistentSMPCData pd{};
+    inst->saturn->SMPC.SavePersistentData(pd);
+    pd.STE = true;
+    inst->saturn->SMPC.LoadPersistentData(pd);
+    return YMIR_OK;
+}
+
 void ymir_bridge_set_rtc_to_host(YmirInstance *inst, int64_t offsetSeconds) {
     if (!inst) return;
     /* Set the SMPC's RTC to the host's current date+time, optionally
