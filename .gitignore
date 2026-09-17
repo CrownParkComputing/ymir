@@ -47,3 +47,42 @@ cmake-build-*/
 # Generated mig files on MacOS
 apps/ymir-sdl3/src/util/mig/a64
 apps/ymir-sdl3/src/util/mig/x64
+
+# Keystore files (release signing config). The upload keystore is registered
+# with Play Console under the com.crownpark.ymir_multiplatform listing; never
+# commit it.
+*.jks
+*.keystore
+
+# Release signing config: holds the .jks path and passwords. The .jks file
+# itself is also gitignored under *.jks above. `key.properties.example`
+# IS checked in so the schema survives across checkouts.
+flutter_app/android/key.properties
+
+# iOS: the core is COMMITTED, not ignored -- the same as Retro-C64 and
+# Retro-Amiga do with theirs. Xcode Cloud cannot build it: the native build
+# needs the vendored submodules and a long CMake pass, neither of which exists
+# in Apple's build image. An ignored core means the cloud build produces an app
+# that installs and then dies at dlopen.
+#
+# Build it with native/ymir_core/ios/build-ios-macos.sh (device) and the
+# iphonesimulator sysroot variant, then package both as the xcframework.
+!flutter_app/ios/Frameworks/
+flutter_app/ios/Flutter/Generated.xcconfig
+flutter_app/ios/Flutter/flutter_export_environment.sh
+flutter_app/ios/Pods/
+
+# Never commit copyrighted Sega Saturn BIOS / IPL images.
+# Users must supply their own legally-dumped BIOS; the app does not bundle one.
+*.bin
+bios/
+ipl/
+roms/ipl/
+saturn_bios*
+
+# Exception: the free/homebrew demo in tools/test-roms/homebrew/ IS meant to
+# ship so reviewers can boot the emulator without any commercial/licensed
+# content. It is a SegaXtreme homebrew-competition release (Pixel Poppy Pong),
+# not Sega's copyrighted BIOS.
+!tools/test-roms/homebrew/
+!tools/test-roms/homebrew/**

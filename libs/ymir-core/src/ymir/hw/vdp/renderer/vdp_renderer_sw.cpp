@@ -4189,13 +4189,18 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         for (uint32 x = 0; Color888 &outputColor : framebufferOutput) {
             if (layer0ColorOffsetEnabled[x]) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[scanline_layers[x][0]]];
-                outputColor = {
-                    .r = kColorOffsetLUT[colorOffset.r][outputColor.r],
-                    .g = kColorOffsetLUT[colorOffset.g][outputColor.g],
-                    .b = kColorOffsetLUT[colorOffset.b][outputColor.b],
-                    .pad = 0,
-                    .msb = 0,
-                };
+                // Field-by-field rather than `outputColor = { .r = ..., .g = ...,
+                // .b = ... }`: the brace-init assignment to a union trips
+                // Apple Clang 15 in Xcode 15.4 ("no viable overloaded '='").
+                // Direct field assignment compiles cleanly on every clang
+                // version tested and matches the style already used in this
+                // file. Carried forward from 0.3.x -- iOS is a target here
+                // that it is not upstream, so this keeps coming back.
+                outputColor.r = kColorOffsetLUT[colorOffset.r][outputColor.r];
+                outputColor.g = kColorOffsetLUT[colorOffset.g][outputColor.g];
+                outputColor.b = kColorOffsetLUT[colorOffset.b][outputColor.b];
+                outputColor.pad = 0;
+                outputColor.msb = 0;
             }
             ++x;
         }
